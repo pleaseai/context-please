@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/pleaseai/context-please/compare/mcp-v0.6.0...mcp-v0.6.1) (2026-01-31)
+
+
+### Bug Fixes
+
+* **mcp:** add explicit VECTOR_DB_TYPE=milvus handling to prevent fallback to FAISS ([#63](https://github.com/pleaseai/context-please/issues/63)) ([e250c35](https://github.com/pleaseai/context-please/commit/e250c3541369f1d4c802efc6f3dfc410b075d3e7))
+
 ## [0.6.0](https://github.com/pleaseai/context-please/compare/mcp-v0.5.0...mcp-v0.6.0) (2025-12-19)
 
 
