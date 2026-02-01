@@ -288,7 +288,7 @@ export class Context {
     codebasePath: string,
     progressCallback?: (progress: { phase: string, current: number, total: number, percentage: number }) => void,
     forceReindex: boolean = false,
-  ): Promise<{ indexedFiles: number, totalChunks: number, status: 'completed' | 'limit_reached' }> {
+  ): Promise<{ indexedFiles: number, totalChunks: number, insertedChunks: number, failedBatches: number, failedChunks: number, status: 'completed' | 'completed_with_errors' | 'failed' | 'limit_reached' }> {
     const isHybrid = this.getIsHybrid()
     const searchType = isHybrid === true ? 'hybrid search' : 'semantic search'
     console.log(`[Context] 🚀 Starting to index codebase with ${searchType}: ${codebasePath}`)
@@ -308,7 +308,7 @@ export class Context {
 
     if (codeFiles.length === 0) {
       progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 })
-      return { indexedFiles: 0, totalChunks: 0, status: 'completed' }
+      return { indexedFiles: 0, totalChunks: 0, insertedChunks: 0, failedBatches: 0, failedChunks: 0, status: 'completed' }
     }
 
     // 3. Process each file with streaming chunk processing
@@ -334,7 +334,7 @@ export class Context {
       },
     )
 
-    console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`)
+    console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, inserted ${result.insertedChunks}/${result.totalChunks} chunks`)
 
     progressCallback?.({
       phase: 'Indexing complete!',
@@ -346,6 +346,9 @@ export class Context {
     return {
       indexedFiles: result.processedFiles,
       totalChunks: result.totalChunks,
+      insertedChunks: result.insertedChunks,
+      failedBatches: result.failedBatches,
+      failedChunks: result.failedChunks,
       status: result.status,
     }
   }
@@ -870,7 +873,7 @@ export class Context {
     filePaths: string[],
     codebasePath: string,
     onFileProcessed?: (filePath: string, fileIndex: number, totalFiles: number) => void,
-  ): Promise<{ processedFiles: number, totalChunks: number, status: 'completed' | 'limit_reached' }> {
+  ): Promise<{ processedFiles: number, totalChunks: number, insertedChunks: number, failedBatches: number, failedChunks: number, status: 'completed' | 'completed_with_errors' | 'failed' | 'limit_reached' }> {
     const isHybrid = this.getIsHybrid()
     const EMBEDDING_BATCH_SIZE = Math.max(1, Number.parseInt(envManager.get('EMBEDDING_BATCH_SIZE') || '100', 10))
     const CHUNK_LIMIT = 450000
@@ -883,6 +886,9 @@ export class Context {
     let chunkBuffer: Array<{ chunk: CodeChunk, codebasePath: string }> = []
     let processedFiles = 0
     let totalChunks = 0
+    let insertedChunks = 0
+    let failedBatches = 0
+    let failedChunks = 0
     let limitReached = false
 
     for (let i = 0; i < filePaths.length; i++) {
@@ -915,12 +921,16 @@ export class Context {
 
           // Process batch when buffer reaches EMBEDDING_BATCH_SIZE (skip for Qdrant hybrid)
           if (!needsBM25Training && chunkBuffer.length >= EMBEDDING_BATCH_SIZE) {
+            const batchSize = chunkBuffer.length
             try {
               await this.processChunkBuffer(chunkBuffer)
+              insertedChunks += batchSize
             }
             catch (error) {
+              failedBatches++
+              failedChunks += batchSize
               const searchType = isHybrid === true ? 'hybrid' : 'regular'
-              console.error(`[Context] ❌ Failed to process chunk batch for ${searchType}:`, error)
+              console.error(`[Context] ❌ Failed to process chunk batch for ${searchType} (${batchSize} chunks lost):`, error)
               if (error instanceof Error) {
                 console.error('[Context] Stack trace:', error.stack)
               }
@@ -972,12 +982,16 @@ export class Context {
       console.log(`[Context] 📝 Processing ${allChunks.length} chunks in batches of ${EMBEDDING_BATCH_SIZE}...`)
       for (let i = 0; i < allChunks.length; i += EMBEDDING_BATCH_SIZE) {
         const batch = allChunks.slice(i, i + EMBEDDING_BATCH_SIZE)
+        const batchSize = batch.length
         try {
           await this.processChunkBuffer(batch)
+          insertedChunks += batchSize
           console.log(`[Context] 📊 Processed batch ${Math.floor(i / EMBEDDING_BATCH_SIZE) + 1}/${Math.ceil(allChunks.length / EMBEDDING_BATCH_SIZE)}`)
         }
         catch (error) {
-          console.error(`[Context] ❌ Failed to process chunk batch:`, error)
+          failedBatches++
+          failedChunks += batchSize
+          console.error(`[Context] ❌ Failed to process chunk batch (${batchSize} chunks lost):`, error)
           if (error instanceof Error) {
             console.error('[Context] Stack trace:', error.stack)
           }
@@ -987,22 +1001,48 @@ export class Context {
     else if (chunkBuffer.length > 0) {
       // Process any remaining chunks in the buffer (for non-Qdrant hybrid)
       const searchType = isHybrid === true ? 'hybrid' : 'regular'
-      console.log(`📝 Processing final batch of ${chunkBuffer.length} chunks for ${searchType}`)
+      const batchSize = chunkBuffer.length
+      console.log(`📝 Processing final batch of ${batchSize} chunks for ${searchType}`)
       try {
         await this.processChunkBuffer(chunkBuffer)
+        insertedChunks += batchSize
       }
       catch (error) {
-        console.error(`[Context] ❌ Failed to process final chunk batch for ${searchType}:`, error)
+        failedBatches++
+        failedChunks += batchSize
+        console.error(`[Context] ❌ Failed to process final chunk batch for ${searchType} (${batchSize} chunks lost):`, error)
         if (error instanceof Error) {
           console.error('[Context] Stack trace:', error.stack)
         }
       }
     }
 
+    // Determine status based on failure counters
+    let status: 'completed' | 'completed_with_errors' | 'failed' | 'limit_reached'
+    if (limitReached) {
+      status = 'limit_reached'
+    }
+    else if (insertedChunks === 0 && failedBatches > 0) {
+      status = 'failed'
+    }
+    else if (failedBatches > 0) {
+      status = 'completed_with_errors'
+    }
+    else {
+      status = 'completed'
+    }
+
+    if (failedBatches > 0) {
+      console.warn(`[Context] ⚠️  Embedding failures: ${failedBatches} batch(es) failed, ${failedChunks}/${totalChunks} chunks lost. ${insertedChunks} chunks inserted successfully.`)
+    }
+
     return {
       processedFiles,
       totalChunks,
-      status: limitReached ? 'limit_reached' : 'completed',
+      insertedChunks,
+      failedBatches,
+      failedChunks,
+      status,
     }
   }
 
