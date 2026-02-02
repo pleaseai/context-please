@@ -618,7 +618,31 @@ search_code(path="/Users/bob/project/vendor/lib", base_path="/Users/bob/project"
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `base_path` | No | Absolute path prefix to strip. Must be a parent directory of `path`. When omitted, behavior is identical to previous versions. |
+| `base_path` | No | Absolute path prefix to strip. Must be a parent directory of `path`. Falls back to `DEFAULT_BASE_PATH` env var if not provided. When neither is set, behavior is identical to previous versions. |
+
+#### Environment Variable: `DEFAULT_BASE_PATH`
+
+Instead of passing `base_path` on every tool call, you can set `DEFAULT_BASE_PATH` in the MCP server configuration. This acts as a persistent default that applies to all calls unless overridden by an explicit `base_path` parameter.
+
+**MCP config example (`.mcp.json`):**
+```json
+{
+  "context-please": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@anthropic/context-please-mcp"],
+    "env": {
+      "VECTOR_DB_TYPE": "milvus",
+      "MILVUS_ADDRESS": "your-milvus-host:19530",
+      "DEFAULT_BASE_PATH": "/var/www/html"
+    }
+  }
+}
+```
+
+With this set, all tool calls automatically use `/var/www/html` as the base path. An explicit `base_path` parameter on any individual call overrides the env var.
+
+**Resolution order:** explicit `base_path` parameter > `DEFAULT_BASE_PATH` env var > no base path (absolute path behavior)
 
 #### Usage Examples
 
@@ -654,11 +678,20 @@ This resolves to the same `vendor/hyva-themes` collection key, finding the share
 - `base_path` must be an **absolute path**
 - `base_path` must be a **parent directory** of `path` (not equal to it)
 - The same `base_path` must be used consistently for indexing, searching, clearing, and status checks on a given collection
-- When `base_path` is omitted, the tool behaves identically to previous versions (full backward compatibility)
+- When neither `base_path` nor `DEFAULT_BASE_PATH` is set, the tool behaves identically to previous versions (full backward compatibility)
+- An explicit `base_path` parameter always overrides `DEFAULT_BASE_PATH`
 
 #### For AI Agents
 
-When instructing an AI coding agent to use context-please with portable indexes, include these guidelines:
+When instructing an AI coding agent to use context-please with portable indexes, there are two approaches:
+
+**Approach 1: Set `DEFAULT_BASE_PATH` in MCP config (recommended)**
+
+Configure the env var in `.mcp.json` so agents don't need to know about `base_path` at all. All calls automatically use portable collection keys. No agent instructions needed.
+
+**Approach 2: Instruct the agent to pass `base_path` explicitly**
+
+If you can't set the env var, include these guidelines for the agent:
 
 1. **Determine the project root** as the `base_path` value (e.g., the directory containing `.git`, `composer.json`, or `package.json`)
 2. **Use `base_path` consistently** across all `index_codebase`, `search_code`, `clear_index`, and `get_indexing_status` calls for the same codebase
@@ -675,6 +708,7 @@ root directory. For example, if the project is at /var/www/html:
   search_code(path="/var/www/html/vendor/magento", base_path="/var/www/html", query="...")
 
 This ensures indexes are portable across development environments.
+Alternatively, set DEFAULT_BASE_PATH=/var/www/html in the MCP server env config.
 ```
 
 ---
