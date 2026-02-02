@@ -226,6 +226,10 @@ export class ToolHandlers {
         }
       }
 
+      const displayPath = basePath
+        ? `'${absolutePath}' (collection: '${portableKey}')`
+        : `'${absolutePath}'`
+
       if (basePath) {
         console.log(`[INDEX] Using portable key '${portableKey}' (base_path: ${basePath})`)
       }
@@ -235,7 +239,7 @@ export class ToolHandlers {
         return {
           content: [{
             type: 'text',
-            text: `Codebase '${portableKey}' is already being indexed in the background. Please wait for completion.`,
+            text: `Codebase ${displayPath} is already being indexed in the background. Please wait for completion.`,
           }],
           isError: true,
         }
@@ -251,7 +255,7 @@ export class ToolHandlers {
         return {
           content: [{
             type: 'text',
-            text: `Codebase '${portableKey}' is already indexed. Use force=true to re-index.`,
+            text: `Codebase ${displayPath} is already indexed. Use force=true to re-index.`,
           }],
           isError: true,
         }
@@ -334,10 +338,6 @@ export class ToolHandlers {
         ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
         : ''
 
-      const basePathInfo = basePath
-        ? `\nUsing portable collection key: '${portableKey}' (base_path: '${basePath}')`
-        : ''
-
       const extensionInfo = customFileExtensions.length > 0
         ? `\nUsing ${customFileExtensions.length} custom extensions: ${customFileExtensions.join(', ')}`
         : ''
@@ -349,7 +349,7 @@ export class ToolHandlers {
       return {
         content: [{
           type: 'text',
-          text: `Started background indexing for codebase '${absolutePath}' using ${splitterType.toUpperCase()} splitter.${pathInfo}${basePathInfo}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`,
+          text: `Started background indexing for codebase ${displayPath} using ${splitterType.toUpperCase()} splitter.${pathInfo}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`,
         }],
       }
     }
@@ -518,6 +518,10 @@ export class ToolHandlers {
         }
       }
 
+      const displayPath = basePath
+        ? `'${absolutePath}' (collection: '${portableKey}')`
+        : `'${absolutePath}'`
+
       trackCodebasePath(absolutePath)
 
       // Check if this codebase is indexed or being indexed
@@ -571,7 +575,7 @@ export class ToolHandlers {
             return {
               content: [{
                 type: 'text',
-                text: `Error: Collection exists for '${portableKey}' but statistics could not be retrieved from the vector database.\n\n`
+                text: `Error: Collection exists for ${displayPath} but statistics could not be retrieved from the vector database.\n\n`
                   + `This may indicate:\n`
                   + `  - Collection is not loaded or in an invalid state\n`
                   + `  - Vector database connectivity issues\n`
@@ -593,7 +597,7 @@ export class ToolHandlers {
           return {
             content: [{
               type: 'text',
-              text: `Error: Failed to sync codebase '${portableKey}' from vector database.\n\n`
+              text: `Error: Failed to sync codebase ${displayPath} from vector database.\n\n`
                 + `Error: ${error instanceof Error ? error.message : String(error)}\n\n`
                 + `This may indicate:\n`
                 + `  - Network connectivity issues with the vector database\n`
@@ -618,7 +622,7 @@ export class ToolHandlers {
         return {
           content: [{
             type: 'text',
-            text: `Error: Codebase '${portableKey}' is not indexed. Please index it first using the index_codebase tool.`,
+            text: `Error: Codebase ${displayPath} is not indexed. Please index it first using the index_codebase tool.`,
           }],
           isError: true,
         }
@@ -669,7 +673,7 @@ export class ToolHandlers {
       console.log(`[SEARCH] ✅ Search completed! Found ${searchResults.length} results using ${embeddingProvider.getProvider()} embeddings`)
 
       if (searchResults.length === 0) {
-        let noResultsMessage = `No results found for query: "${query}" in codebase '${absolutePath}'`
+        let noResultsMessage = `No results found for query: "${query}" in codebase ${displayPath}`
         if (isIndexing) {
           noResultsMessage += `\n\nNote: This codebase is still being indexed. Try searching again after indexing completes, or the query may not match any indexed content.`
         }
@@ -693,7 +697,7 @@ export class ToolHandlers {
           + `   Context: \n\`\`\`${result.language}\n${context}\n\`\`\`\n`
       }).join('\n')
 
-      let resultMessage = `Found ${searchResults.length} results for query: "${query}" in codebase '${absolutePath}'${indexingStatusMessage}\n\n${formattedResults}`
+      let resultMessage = `Found ${searchResults.length} results for query: "${query}" in codebase ${displayPath}${indexingStatusMessage}\n\n${formattedResults}`
 
       if (isIndexing) {
         resultMessage += `\n\n💡 **Tip**: This codebase is still being indexed. More results may become available as indexing progresses.`
@@ -786,6 +790,10 @@ export class ToolHandlers {
         }
       }
 
+      const displayPath = basePath
+        ? `'${absolutePath}' (collection: '${portableKey}')`
+        : `'${absolutePath}'`
+
       // Check if this codebase is indexed or being indexed
       const isIndexed = this.snapshotManager.getIndexedCodebases().includes(portableKey)
       const isIndexing = this.snapshotManager.getIndexingCodebases().includes(portableKey)
@@ -794,7 +802,7 @@ export class ToolHandlers {
         return {
           content: [{
             type: 'text',
-            text: `Error: Codebase '${portableKey}' is not indexed or being indexed.`,
+            text: `Error: Codebase ${displayPath} is not indexed or being indexed.`,
           }],
           isError: true,
         }
@@ -827,7 +835,7 @@ export class ToolHandlers {
       // Save snapshot after clearing index
       this.snapshotManager.saveCodebaseSnapshot()
 
-      let resultText = `Successfully cleared codebase '${portableKey}'`
+      let resultText = `Successfully cleared codebase ${displayPath}`
 
       const remainingIndexed = this.snapshotManager.getIndexedCodebases().length
       const remainingIndexing = this.snapshotManager.getIndexingCodebases().length
@@ -914,6 +922,10 @@ export class ToolHandlers {
         }
       }
 
+      const displayPath = basePath
+        ? `'${absolutePath}' (collection: '${portableKey}')`
+        : `'${absolutePath}'`
+
       // Check indexing status using new status system
       const status = this.snapshotManager.getCodebaseStatus(portableKey)
       const info = this.snapshotManager.getCodebaseInfo(portableKey)
@@ -924,13 +936,13 @@ export class ToolHandlers {
         case 'indexed':
           if (info && 'indexedFiles' in info) {
             const indexedInfo = info as any
-            statusMessage = `✅ Codebase '${absolutePath}' is fully indexed and ready for search.`
+            statusMessage = `✅ Codebase ${displayPath} is fully indexed and ready for search.`
             statusMessage += `\n📊 Statistics: ${indexedInfo.indexedFiles} files, ${indexedInfo.totalChunks} chunks`
             statusMessage += `\n📅 Status: ${indexedInfo.indexStatus}`
             statusMessage += `\n🕐 Last updated: ${new Date(indexedInfo.lastUpdated).toLocaleString()}`
           }
           else {
-            statusMessage = `✅ Codebase '${absolutePath}' is fully indexed and ready for search.`
+            statusMessage = `✅ Codebase ${displayPath} is fully indexed and ready for search.`
           }
           break
 
@@ -938,7 +950,7 @@ export class ToolHandlers {
           if (info && 'indexingPercentage' in info) {
             const indexingInfo = info as any
             const progressPercentage = indexingInfo.indexingPercentage || 0
-            statusMessage = `🔄 Codebase '${absolutePath}' is currently being indexed. Progress: ${progressPercentage.toFixed(1)}%`
+            statusMessage = `🔄 Codebase ${displayPath} is currently being indexed. Progress: ${progressPercentage.toFixed(1)}%`
 
             // Add more detailed status based on progress
             if (progressPercentage < 10) {
@@ -950,14 +962,14 @@ export class ToolHandlers {
             statusMessage += `\n🕐 Last updated: ${new Date(indexingInfo.lastUpdated).toLocaleString()}`
           }
           else {
-            statusMessage = `🔄 Codebase '${absolutePath}' is currently being indexed.`
+            statusMessage = `🔄 Codebase ${displayPath} is currently being indexed.`
           }
           break
 
         case 'indexfailed':
           if (info && 'errorMessage' in info) {
             const failedInfo = info as any
-            statusMessage = `❌ Codebase '${absolutePath}' indexing failed.`
+            statusMessage = `❌ Codebase ${displayPath} indexing failed.`
             statusMessage += `\n🚨 Error: ${failedInfo.errorMessage}`
             if (failedInfo.lastAttemptedPercentage !== undefined) {
               statusMessage += `\n📊 Failed at: ${failedInfo.lastAttemptedPercentage.toFixed(1)}% progress`
@@ -966,13 +978,13 @@ export class ToolHandlers {
             statusMessage += `\n💡 You can retry indexing by running the index_codebase command again.`
           }
           else {
-            statusMessage = `❌ Codebase '${absolutePath}' indexing failed. You can retry indexing.`
+            statusMessage = `❌ Codebase ${displayPath} indexing failed. You can retry indexing.`
           }
           break
 
         case 'not_found':
         default:
-          statusMessage = `❌ Codebase '${absolutePath}' is not indexed. Please use the index_codebase tool to index it first.`
+          statusMessage = `❌ Codebase ${displayPath} is not indexed. Please use the index_codebase tool to index it first.`
           break
       }
 
