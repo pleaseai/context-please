@@ -17,6 +17,45 @@ export class ToolHandlers {
     console.log(`[WORKSPACE] Current workspace: ${this.currentWorkspace}`)
   }
 
+  /** Timeout (ms) for the non-blocking cloud sync. */
+  private static readonly CLOUD_SYNC_TIMEOUT_MS = 10_000
+
+  /** Whether a non-blocking cloud sync is already in flight. */
+  private cloudSyncInFlight = false
+
+  /**
+   * Fire-and-forget cloud sync with a timeout guard.
+   *
+   * - Never blocks the calling handler.
+   * - Prevents overlapping syncs (single-flight).
+   * - Aborts after CLOUD_SYNC_TIMEOUT_MS so a hung ensureLoaded() call on a
+   *   remote Milvus instance cannot crash the MCP process.
+   */
+  private nonBlockingCloudSync(): void {
+    if (this.cloudSyncInFlight) {
+      return
+    }
+
+    this.cloudSyncInFlight = true
+
+    let timeoutId: NodeJS.Timeout
+    const timeout = new Promise<void>((_, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new Error('Cloud sync timed out')),
+        ToolHandlers.CLOUD_SYNC_TIMEOUT_MS,
+      )
+    })
+
+    Promise.race([this.syncIndexedCodebasesFromCloud(), timeout])
+      .catch((err) => {
+        console.warn(`[SYNC-CLOUD] Non-blocking cloud sync failed: ${err.message || err}`)
+      })
+      .finally(() => {
+        clearTimeout(timeoutId)
+        this.cloudSyncInFlight = false
+      })
+  }
+
   /**
    * Sync indexed codebases from vector database collections
    * This method fetches all collections from the vector database (Milvus, Zilliz, or Qdrant),
@@ -170,8 +209,11 @@ export class ToolHandlers {
     const customIgnorePatterns = ignorePatterns || []
 
     try {
-      // Sync indexed codebases from cloud first
-      await this.syncIndexedCodebasesFromCloud()
+      // Cloud sync runs on startup via SyncManager.startBackgroundSync().
+      // Calling it here blocks every index request and can crash the MCP
+      // process when ensureLoaded() hangs on a remote/shared Milvus instance.
+      // Fire-and-forget with a timeout so it never blocks or kills the process.
+      this.nonBlockingCloudSync()
 
       // Validate splitter parameter
       if (splitterType !== 'ast' && splitterType !== 'langchain') {
@@ -454,8 +496,11 @@ export class ToolHandlers {
     const resultLimit = limit || 10
 
     try {
-      // Sync indexed codebases from cloud first
-      await this.syncIndexedCodebasesFromCloud()
+      // Cloud sync runs on startup via SyncManager.startBackgroundSync().
+      // Calling it here blocks every search request and can crash the MCP
+      // process when ensureLoaded() hangs on a remote/shared Milvus instance.
+      // Fire-and-forget with a timeout so it never blocks or kills the process.
+      this.nonBlockingCloudSync()
 
       // Force absolute path resolution - warn if relative path provided
       const absolutePath = ensureAbsolutePath(codebasePath)
