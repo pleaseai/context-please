@@ -563,7 +563,91 @@ export class ToolHandlers {
       // Use the combined check: either in snapshot OR has actual collection
       const isIndexed = isIndexedInSnapshot || hasVectorCollection
 
+      // Build filter expression from extensionFilter list (shared by both paths)
+      let filterExpr: string | undefined
+      if (Array.isArray(extensionFilter) && extensionFilter.length > 0) {
+        const cleaned = extensionFilter
+          .filter((v: any) => typeof v === 'string')
+          .map((v: string) => v.trim())
+          .filter((v: string) => v.length > 0)
+        const invalid = cleaned.filter((e: string) => !(e.startsWith('.') && e.length > 1 && !/\s/.test(e)))
+        if (invalid.length > 0) {
+          return {
+            content: [{ type: 'text', text: `Error: Invalid file extensions in extensionFilter: ${JSON.stringify(invalid)}. Use proper extensions like '.ts', '.py'.` }],
+            isError: true,
+          }
+        }
+        const quoted = cleaned.map((e: string) => `'${e}'`).join(', ')
+        filterExpr = `fileExtension in [${quoted}]`
+      }
+
+      // If no exact collection found, attempt multi-collection prefix search
       if (!isIndexed && !isIndexing) {
+        console.log(`[SEARCH] No exact collection for '${absolutePath}', attempting multi-collection prefix search...`)
+
+        try {
+          const vectorDb = this.context.getVectorDatabase()
+
+          // Check if the vector database supports getCollectionCodebasePaths
+          if (typeof (vectorDb as any).getCollectionCodebasePaths === 'function') {
+            const collectionMap: Map<string, string> = await (vectorDb as any).getCollectionCodebasePaths()
+
+            // Check if any collections match the path as a prefix
+            let hasMatches = false
+            for (const codebasePath of collectionMap.values()) {
+              if (codebasePath.startsWith(absolutePath)) {
+                hasMatches = true
+                break
+              }
+            }
+
+            if (hasMatches) {
+              console.log(`[SEARCH] Found matching collections for prefix '${absolutePath}', running parallel multi-collection search`)
+
+              const searchResults = await this.context.semanticSearchMulti(
+                absolutePath,
+                collectionMap,
+                query,
+                Math.min(resultLimit, 50),
+                0.3,
+                filterExpr,
+              )
+
+              if (searchResults.length === 0) {
+                return {
+                  content: [{
+                    type: 'text',
+                    text: `No results found for query: "${query}" across collections matching '${absolutePath}'`,
+                  }],
+                }
+              }
+
+              // Count how many collections contributed results
+              const collectionsSearched = Array.from(collectionMap.values()).filter((cp) => cp.startsWith(absolutePath)).length
+
+              const formattedResults = searchResults.map((result: any, index: number) => {
+                const location = `${result.relativePath}:${result.startLine}-${result.endLine}`
+                const context = truncateContent(result.content, 5000)
+
+                return `${index + 1}. Code snippet (${result.language})\n`
+                  + `   Location: ${location}\n`
+                  + `   Rank: ${index + 1}\n`
+                  + `   Context: \n\`\`\`${result.language}\n${context}\n\`\`\`\n`
+              }).join('\n')
+
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Found ${searchResults.length} results for query: "${query}" across ${collectionsSearched} collections matching '${absolutePath}'\n\n${formattedResults}`,
+                }],
+              }
+            }
+          }
+        }
+        catch (multiSearchError) {
+          console.warn(`[SEARCH] Multi-collection search failed, falling back to standard error:`, multiSearchError)
+        }
+
         return {
           content: [{
             type: 'text',
@@ -587,24 +671,6 @@ export class ToolHandlers {
       const embeddingProvider = this.context.getEmbedding()
       console.log(`[SEARCH] 🧠 Using embedding provider: ${embeddingProvider.getProvider()} for search`)
       console.log(`[SEARCH] 🔍 Generating embeddings for query using ${embeddingProvider.getProvider()}...`)
-
-      // Build filter expression from extensionFilter list
-      let filterExpr: string | undefined
-      if (Array.isArray(extensionFilter) && extensionFilter.length > 0) {
-        const cleaned = extensionFilter
-          .filter((v: any) => typeof v === 'string')
-          .map((v: string) => v.trim())
-          .filter((v: string) => v.length > 0)
-        const invalid = cleaned.filter((e: string) => !(e.startsWith('.') && e.length > 1 && !/\s/.test(e)))
-        if (invalid.length > 0) {
-          return {
-            content: [{ type: 'text', text: `Error: Invalid file extensions in extensionFilter: ${JSON.stringify(invalid)}. Use proper extensions like '.ts', '.py'.` }],
-            isError: true,
-          }
-        }
-        const quoted = cleaned.map((e: string) => `'${e}'`).join(', ')
-        filterExpr = `fileExtension in [${quoted}]`
-      }
 
       // Search in the specified codebase
       const searchResults = await this.context.semanticSearch(

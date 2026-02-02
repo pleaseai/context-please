@@ -712,6 +712,57 @@ export class MilvusVectorDatabase extends BaseVectorDatabase<MilvusConfig> {
   }
 
   /**
+   * Resolve all collections to their codebasePath metadata.
+   * Queries one document per collection to extract metadata.codebasePath.
+   * Returns a Map of collectionName → codebasePath.
+   */
+  async getCollectionCodebasePaths(): Promise<Map<string, string>> {
+    await this.ensureInitialized()
+
+    if (!this.client) {
+      throw new Error('MilvusClient is not initialized after ensureInitialized().')
+    }
+
+    const collections = await this.listCollections()
+    const result = new Map<string, string>()
+
+    // Query all collections in parallel for speed
+    const queries = collections
+      .filter((name) => name.startsWith('code_chunks_') || name.startsWith('hybrid_code_chunks_'))
+      .map(async (collectionName) => {
+        try {
+          await this.ensureLoaded(collectionName)
+
+          const docs = await this.client!.query({
+            collection_name: collectionName,
+            filter: '',
+            output_fields: ['metadata'],
+            limit: 1,
+          })
+
+          if (docs.data && docs.data.length > 0) {
+            const metadataValue = docs.data[0].metadata
+            if (metadataValue) {
+              const metadata = typeof metadataValue === 'string'
+                ? JSON.parse(metadataValue)
+                : metadataValue
+              if (metadata.codebasePath && typeof metadata.codebasePath === 'string') {
+                result.set(collectionName, metadata.codebasePath)
+              }
+            }
+          }
+        }
+        catch (error) {
+          console.warn(`[MilvusDB] ⚠️  Failed to resolve codebasePath for collection ${collectionName}:`, error)
+        }
+      })
+
+    await Promise.all(queries)
+
+    return result
+  }
+
+  /**
    * Wrapper method to handle collection creation with limit detection for gRPC client
    * Returns true if collection can be created, false if limit exceeded
    */
