@@ -338,6 +338,10 @@ This tool is versatile and can be used before completing various tasks to retrie
                   description: 'Optional: Additional ignore patterns to exclude specific files/directories beyond defaults. Only include this parameter if the user explicitly requests custom ignore patterns (e.g., [\'static/**\', \'*.tmp\', \'private/**\'])',
                   default: [],
                 },
+                base_path: {
+                  type: 'string',
+                  description: 'Optional ABSOLUTE path prefix to strip for portable collection naming. Makes indexes shareable across machines with different root paths. Must be a parent directory of path.',
+                },
               },
               required: ['path'],
             },
@@ -370,6 +374,10 @@ This tool is versatile and can be used before completing various tasks to retrie
                   description: 'Optional: List of file extensions to filter results. (e.g., [\'.ts\',\'.py\']).',
                   default: [],
                 },
+                base_path: {
+                  type: 'string',
+                  description: 'Optional ABSOLUTE path prefix to strip for portable collection naming. Must match the base_path used during indexing to find the correct collection.',
+                },
               },
               required: ['path', 'query'],
             },
@@ -384,6 +392,10 @@ This tool is versatile and can be used before completing various tasks to retrie
                   type: 'string',
                   description: `ABSOLUTE path to the codebase directory to clear.`,
                 },
+                base_path: {
+                  type: 'string',
+                  description: 'Optional ABSOLUTE path prefix to strip for portable collection naming. Must match the base_path used during indexing.',
+                },
               },
               required: ['path'],
             },
@@ -397,6 +409,10 @@ This tool is versatile and can be used before completing various tasks to retrie
                 path: {
                   type: 'string',
                   description: `ABSOLUTE path to the codebase directory to check status for.`,
+                },
+                base_path: {
+                  type: 'string',
+                  description: 'Optional ABSOLUTE path prefix to strip for portable collection naming. Must match the base_path used during indexing.',
                 },
               },
               required: ['path'],

@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { COLLECTION_LIMIT_MESSAGE, Context } from '@pleaseai/context-please-core'
 import { SnapshotManager } from './snapshot.js'
-import { ensureAbsolutePath, trackCodebasePath, truncateContent } from './utils.js'
+import { ensureAbsolutePath, resolvePortableKey, trackCodebasePath, truncateContent } from './utils.js'
 
 export class ToolHandlers {
   private context: Context
@@ -163,7 +163,7 @@ export class ToolHandlers {
   }
 
   public async handleIndexCodebase(args: any) {
-    const { path: codebasePath, force, splitter, customExtensions, ignorePatterns } = args
+    const { path: codebasePath, force, splitter, customExtensions, ignorePatterns, base_path: basePath } = args
     const forceReindex = force || false
     const splitterType = splitter || 'ast' // Default to AST
     const customFileExtensions = customExtensions || []
@@ -209,28 +209,49 @@ export class ToolHandlers {
         }
       }
 
-      // Check if already indexing
-      if (this.snapshotManager.getIndexingCodebases().includes(absolutePath)) {
+      // Resolve portable key for collection naming
+      let portableKey: string
+      let resolvedBasePath: string | undefined
+      try {
+        portableKey = resolvePortableKey(absolutePath, basePath)
+        resolvedBasePath = basePath ? path.resolve(basePath) : undefined
+      }
+      catch (error: any) {
         return {
           content: [{
             type: 'text',
-            text: `Codebase '${absolutePath}' is already being indexed in the background. Please wait for completion.`,
+            text: `Error: ${error.message}`,
+          }],
+          isError: true,
+        }
+      }
+
+      if (basePath) {
+        console.log(`[INDEX] Using portable key '${portableKey}' (base_path: ${basePath})`)
+      }
+
+      // Check if already indexing
+      if (this.snapshotManager.getIndexingCodebases().includes(portableKey)) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Codebase '${portableKey}' is already being indexed in the background. Please wait for completion.`,
           }],
           isError: true,
         }
       }
 
       // Check if the snapshot and cloud index are in sync
-      if (this.snapshotManager.getIndexedCodebases().includes(absolutePath) !== await this.context.hasIndex(absolutePath)) {
-        console.warn(`[INDEX-VALIDATION] ❌ Snapshot and cloud index mismatch: ${absolutePath}`)
+      if (this.snapshotManager.getIndexedCodebases().includes(portableKey) !== await this.context.hasIndex(portableKey)) {
+        console.warn(`[INDEX-VALIDATION] Snapshot and cloud index mismatch: ${portableKey}`)
       }
 
       // Check if already indexed (unless force is true)
-      if (!forceReindex && this.snapshotManager.getIndexedCodebases().includes(absolutePath)) {
+      if (!forceReindex && this.snapshotManager.getIndexedCodebases().includes(portableKey)) {
         return {
           content: [{
             type: 'text',
-            text: `Codebase '${absolutePath}' is already indexed. Use force=true to re-index.`,
+            text: `Codebase '${portableKey}' is already indexed. Use force=true to re-index.`,
           }],
           isError: true,
         }
@@ -238,23 +259,23 @@ export class ToolHandlers {
 
       // If force reindex and codebase is already indexed, remove it
       if (forceReindex) {
-        if (this.snapshotManager.getIndexedCodebases().includes(absolutePath)) {
-          console.log(`[FORCE-REINDEX] 🔄 Removing '${absolutePath}' from indexed list for re-indexing`)
-          this.snapshotManager.removeIndexedCodebase(absolutePath)
+        if (this.snapshotManager.getIndexedCodebases().includes(portableKey)) {
+          console.log(`[FORCE-REINDEX] Removing '${portableKey}' from indexed list for re-indexing`)
+          this.snapshotManager.removeIndexedCodebase(portableKey)
         }
-        if (await this.context.hasIndex(absolutePath)) {
-          console.log(`[FORCE-REINDEX] 🔄 Clearing index for '${absolutePath}'`)
-          await this.context.clearIndex(absolutePath)
+        if (await this.context.hasIndex(portableKey)) {
+          console.log(`[FORCE-REINDEX] Clearing index for '${portableKey}'`)
+          await this.context.clearIndex(portableKey)
         }
       }
 
       // CRITICAL: Pre-index collection creation validation
       try {
-        console.log(`[INDEX-VALIDATION] 🔍 Validating collection creation capability`)
+        console.log(`[INDEX-VALIDATION] Validating collection creation capability`)
         const canCreateCollection = await this.context.getVectorDatabase().checkCollectionLimit()
 
         if (!canCreateCollection) {
-          console.error(`[INDEX-VALIDATION] ❌ Collection limit validation failed: ${absolutePath}`)
+          console.error(`[INDEX-VALIDATION] Collection limit validation failed: ${portableKey}`)
 
           // CRITICAL: Immediately return the COLLECTION_LIMIT_MESSAGE to MCP client
           return {
@@ -266,11 +287,11 @@ export class ToolHandlers {
           }
         }
 
-        console.log(`[INDEX-VALIDATION] ✅  Collection creation validation completed`)
+        console.log(`[INDEX-VALIDATION] Collection creation validation completed`)
       }
       catch (validationError: any) {
         // Handle other collection creation errors
-        console.error(`[INDEX-VALIDATION] ❌ Collection creation validation failed:`, validationError)
+        console.error(`[INDEX-VALIDATION] Collection creation validation failed:`, validationError)
         return {
           content: [{
             type: 'text',
@@ -293,24 +314,28 @@ export class ToolHandlers {
       }
 
       // Check current status and log if retrying after failure
-      const currentStatus = this.snapshotManager.getCodebaseStatus(absolutePath)
+      const currentStatus = this.snapshotManager.getCodebaseStatus(portableKey)
       if (currentStatus === 'indexfailed') {
-        const failedInfo = this.snapshotManager.getCodebaseInfo(absolutePath) as any
+        const failedInfo = this.snapshotManager.getCodebaseInfo(portableKey) as any
         console.log(`[BACKGROUND-INDEX] Retrying indexing for previously failed codebase. Previous error: ${failedInfo?.errorMessage || 'Unknown error'}`)
       }
 
       // Set to indexing status and save snapshot immediately
-      this.snapshotManager.setCodebaseIndexing(absolutePath, 0)
+      this.snapshotManager.setCodebaseIndexing(portableKey, 0)
       this.snapshotManager.saveCodebaseSnapshot()
 
       // Track the codebase path for syncing
       trackCodebasePath(absolutePath)
 
       // Start background indexing - now safe to proceed
-      this.startBackgroundIndexing(absolutePath, forceReindex, splitterType)
+      this.startBackgroundIndexing(absolutePath, forceReindex, splitterType, portableKey, resolvedBasePath)
 
       const pathInfo = codebasePath !== absolutePath
         ? `\nNote: Input path '${codebasePath}' was resolved to absolute path '${absolutePath}'`
+        : ''
+
+      const basePathInfo = basePath
+        ? `\nUsing portable collection key: '${portableKey}' (base_path: '${basePath}')`
         : ''
 
       const extensionInfo = customFileExtensions.length > 0
@@ -324,7 +349,7 @@ export class ToolHandlers {
       return {
         content: [{
           type: 'text',
-          text: `Started background indexing for codebase '${absolutePath}' using ${splitterType.toUpperCase()} splitter.${pathInfo}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`,
+          text: `Started background indexing for codebase '${absolutePath}' using ${splitterType.toUpperCase()} splitter.${pathInfo}${basePathInfo}${extensionInfo}${ignoreInfo}\n\nIndexing is running in the background. You can search the codebase while indexing is in progress, but results may be incomplete until indexing completes.`,
         }],
       }
     }
@@ -343,16 +368,24 @@ export class ToolHandlers {
     }
   }
 
-  private async startBackgroundIndexing(codebasePath: string, forceReindex: boolean, splitterType: string) {
+  private async startBackgroundIndexing(
+    codebasePath: string,
+    forceReindex: boolean,
+    splitterType: string,
+    portableKey?: string,
+    basePath?: string,
+  ) {
     const absolutePath = codebasePath
+    const effectiveKey = portableKey || absolutePath
+    const effectiveRoot = basePath || absolutePath
     let lastSaveTime = 0 // Track last save timestamp
 
     try {
-      console.log(`[BACKGROUND-INDEX] Starting background indexing for: ${absolutePath}`)
+      console.log(`[BACKGROUND-INDEX] Starting background indexing for: ${absolutePath} (key: ${effectiveKey})`)
 
       // Note: If force reindex, collection was already cleared during validation phase
       if (forceReindex) {
-        console.log(`[BACKGROUND-INDEX] ℹ️  Force reindex mode - collection was already cleared during validation`)
+        console.log(`[BACKGROUND-INDEX] Force reindex mode - collection was already cleared during validation`)
       }
 
       // Use the existing Context instance for indexing.
@@ -371,9 +404,9 @@ export class ToolHandlers {
       const synchronizer = new FileSynchronizer(absolutePath, ignorePatterns)
       await synchronizer.initialize()
 
-      // Store synchronizer in the context (let context manage collection names)
-      await this.context.getPreparedCollection(absolutePath)
-      const collectionName = this.context.getCollectionName(absolutePath)
+      // Store synchronizer in the context (use effectiveKey for collection name)
+      await this.context.getPreparedCollection(effectiveKey)
+      const collectionName = this.context.getCollectionName(effectiveKey)
       this.context.setSynchronizer(collectionName, synchronizer)
       if (contextForThisTask !== this.context) {
         contextForThisTask.setSynchronizer(collectionName, synchronizer)
@@ -383,28 +416,31 @@ export class ToolHandlers {
 
       // Log embedding provider information before indexing
       const embeddingProvider = this.context.getEmbedding()
-      console.log(`[BACKGROUND-INDEX] 🧠 Using embedding provider: ${embeddingProvider.getProvider()} with dimension: ${embeddingProvider.getDimension()}`)
+      console.log(`[BACKGROUND-INDEX] Using embedding provider: ${embeddingProvider.getProvider()} with dimension: ${embeddingProvider.getDimension()}`)
 
       // Start indexing with the appropriate context and progress tracking
-      console.log(`[BACKGROUND-INDEX] 🚀 Beginning codebase indexing process...`)
+      console.log(`[BACKGROUND-INDEX] Beginning codebase indexing process...`)
       const stats = await contextForThisTask.indexCodebase(absolutePath, (progress) => {
-        // Update progress in snapshot manager using new method
-        this.snapshotManager.setCodebaseIndexing(absolutePath, progress.percentage)
+        // Update progress in snapshot manager using effectiveKey
+        this.snapshotManager.setCodebaseIndexing(effectiveKey, progress.percentage)
 
         // Save snapshot periodically (every 2 seconds to avoid too frequent saves)
         const currentTime = Date.now()
         if (currentTime - lastSaveTime >= 2000) { // 2 seconds = 2000ms
           this.snapshotManager.saveCodebaseSnapshot()
           lastSaveTime = currentTime
-          console.log(`[BACKGROUND-INDEX] 💾 Saved progress snapshot at ${progress.percentage.toFixed(1)}%`)
+          console.log(`[BACKGROUND-INDEX] Saved progress snapshot at ${progress.percentage.toFixed(1)}%`)
         }
 
         console.log(`[BACKGROUND-INDEX] Progress: ${progress.phase} - ${progress.percentage}% (${progress.current}/${progress.total})`)
+      }, false, {
+        collectionKey: effectiveKey,
+        relativizationRoot: effectiveRoot,
       })
-      console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`)
+      console.log(`[BACKGROUND-INDEX] Indexing completed! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`)
 
-      // Set codebase to indexed status with complete statistics
-      this.snapshotManager.setCodebaseIndexed(absolutePath, stats)
+      // Set codebase to indexed status with complete statistics (using effectiveKey)
+      this.snapshotManager.setCodebaseIndexed(effectiveKey, stats)
       this.indexingStats = { indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks }
 
       // Save snapshot after updating codebase lists
@@ -412,7 +448,7 @@ export class ToolHandlers {
 
       let message = `Background indexing completed for '${absolutePath}' using ${splitterType.toUpperCase()} splitter.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`
       if (stats.status === 'limit_reached') {
-        message += `\n⚠️  Warning: Indexing stopped because the chunk limit (450,000) was reached. The index may be incomplete.`
+        message += `\nWarning: Indexing stopped because the chunk limit (450,000) was reached. The index may be incomplete.`
       }
 
       console.log(`[BACKGROUND-INDEX] ${message}`)
@@ -420,12 +456,12 @@ export class ToolHandlers {
     catch (error: any) {
       console.error(`[BACKGROUND-INDEX] Error during indexing for ${absolutePath}:`, error)
 
-      // Get the last attempted progress
-      const lastProgress = this.snapshotManager.getIndexingProgress(absolutePath)
+      // Get the last attempted progress (using effectiveKey)
+      const lastProgress = this.snapshotManager.getIndexingProgress(effectiveKey)
 
       // Set codebase to failed status with error information
       const errorMessage = error.message || String(error)
-      this.snapshotManager.setCodebaseIndexFailed(absolutePath, errorMessage, lastProgress)
+      this.snapshotManager.setCodebaseIndexFailed(effectiveKey, errorMessage, lastProgress)
       this.snapshotManager.saveCodebaseSnapshot()
 
       // Log error but don't crash MCP service - indexing errors are handled gracefully
@@ -434,7 +470,7 @@ export class ToolHandlers {
   }
 
   public async handleSearchCode(args: any) {
-    const { path: codebasePath, query, limit = 10, extensionFilter } = args
+    const { path: codebasePath, query, limit = 10, extensionFilter, base_path: basePath } = args
     const resultLimit = limit || 10
 
     try {
@@ -467,14 +503,29 @@ export class ToolHandlers {
         }
       }
 
+      // Resolve portable key for collection lookup
+      let portableKey: string
+      try {
+        portableKey = resolvePortableKey(absolutePath, basePath)
+      }
+      catch (error: any) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Error: ${error.message}`,
+          }],
+          isError: true,
+        }
+      }
+
       trackCodebasePath(absolutePath)
 
       // Check if this codebase is indexed or being indexed
       // IMPORTANT: Check both snapshot AND actual vector database collection
       // to handle cases where snapshot is out of sync with cloud state
-      const isIndexedInSnapshot = this.snapshotManager.getIndexedCodebases().includes(absolutePath)
-      const isIndexing = this.snapshotManager.getIndexingCodebases().includes(absolutePath)
-      const hasVectorCollection = await this.context.hasIndex(absolutePath)
+      const isIndexedInSnapshot = this.snapshotManager.getIndexedCodebases().includes(portableKey)
+      const isIndexing = this.snapshotManager.getIndexingCodebases().includes(portableKey)
+      const hasVectorCollection = await this.context.hasIndex(portableKey)
 
       // Recovery logic for out-of-sync state between snapshot and vector database
       //
@@ -489,16 +540,16 @@ export class ToolHandlers {
       // - Recover: Query vector DB for actual statistics and sync to snapshot
       // - Result: User can search immediately without re-indexing
       if (hasVectorCollection && !isIndexedInSnapshot && !isIndexing) {
-        console.log(`[SEARCH] Collection exists for '${absolutePath}' but not in snapshot - syncing state`)
+        console.log(`[SEARCH] Collection exists for '${portableKey}' but not in snapshot - syncing state`)
 
         try {
           // Try to retrieve actual statistics from vector database
           // This queries the collection to count unique files and total chunks
-          const stats = await this.context.getCollectionStats(absolutePath)
+          const stats = await this.context.getCollectionStats(portableKey)
 
           if (stats) {
             console.log(`[SEARCH] Retrieved actual stats from vector DB: ${stats.indexedFiles} files, ${stats.totalChunks} chunks`)
-            this.snapshotManager.setCodebaseIndexed(absolutePath, {
+            this.snapshotManager.setCodebaseIndexed(portableKey, {
               indexedFiles: stats.indexedFiles,
               totalChunks: stats.totalChunks,
               status: 'completed',
@@ -507,7 +558,7 @@ export class ToolHandlers {
             // Save snapshot with error handling
             try {
               this.snapshotManager.saveCodebaseSnapshot()
-              console.log(`[SEARCH] Successfully synced snapshot state for '${absolutePath}'`)
+              console.log(`[SEARCH] Successfully synced snapshot state for '${portableKey}'`)
             }
             catch (saveError) {
               console.error(`[SEARCH] Failed to save snapshot after sync: ${saveError}`)
@@ -520,7 +571,7 @@ export class ToolHandlers {
             return {
               content: [{
                 type: 'text',
-                text: `Error: Collection exists for '${absolutePath}' but statistics could not be retrieved from the vector database.\n\n`
+                text: `Error: Collection exists for '${portableKey}' but statistics could not be retrieved from the vector database.\n\n`
                   + `This may indicate:\n`
                   + `  - Collection is not loaded or in an invalid state\n`
                   + `  - Vector database connectivity issues\n`
@@ -542,7 +593,7 @@ export class ToolHandlers {
           return {
             content: [{
               type: 'text',
-              text: `Error: Failed to sync codebase '${absolutePath}' from vector database.\n\n`
+              text: `Error: Failed to sync codebase '${portableKey}' from vector database.\n\n`
                 + `Error: ${error instanceof Error ? error.message : String(error)}\n\n`
                 + `This may indicate:\n`
                 + `  - Network connectivity issues with the vector database\n`
@@ -567,7 +618,7 @@ export class ToolHandlers {
         return {
           content: [{
             type: 'text',
-            text: `Error: Codebase '${absolutePath}' is not indexed. Please index it first using the index_codebase tool.`,
+            text: `Error: Codebase '${portableKey}' is not indexed. Please index it first using the index_codebase tool.`,
           }],
           isError: true,
         }
@@ -606,9 +657,9 @@ export class ToolHandlers {
         filterExpr = `fileExtension in [${quoted}]`
       }
 
-      // Search in the specified codebase
+      // Search in the specified codebase (using portableKey for collection lookup)
       const searchResults = await this.context.semanticSearch(
-        absolutePath,
+        portableKey,
         query,
         Math.min(resultLimit, 50),
         0.3,
@@ -682,7 +733,7 @@ export class ToolHandlers {
   }
 
   public async handleClearIndex(args: any) {
-    const { path: codebasePath } = args
+    const { path: codebasePath, base_path: basePath } = args
 
     if (this.snapshotManager.getIndexedCodebases().length === 0 && this.snapshotManager.getIndexingCodebases().length === 0) {
       return {
@@ -720,28 +771,43 @@ export class ToolHandlers {
         }
       }
 
-      // Check if this codebase is indexed or being indexed
-      const isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath)
-      const isIndexing = this.snapshotManager.getIndexingCodebases().includes(absolutePath)
-
-      if (!isIndexed && !isIndexing) {
+      // Resolve portable key for collection lookup
+      let portableKey: string
+      try {
+        portableKey = resolvePortableKey(absolutePath, basePath)
+      }
+      catch (error: any) {
         return {
           content: [{
             type: 'text',
-            text: `Error: Codebase '${absolutePath}' is not indexed or being indexed.`,
+            text: `Error: ${error.message}`,
           }],
           isError: true,
         }
       }
 
-      console.log(`[CLEAR] Clearing codebase: ${absolutePath}`)
+      // Check if this codebase is indexed or being indexed
+      const isIndexed = this.snapshotManager.getIndexedCodebases().includes(portableKey)
+      const isIndexing = this.snapshotManager.getIndexingCodebases().includes(portableKey)
+
+      if (!isIndexed && !isIndexing) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Error: Codebase '${portableKey}' is not indexed or being indexed.`,
+          }],
+          isError: true,
+        }
+      }
+
+      console.log(`[CLEAR] Clearing codebase: ${portableKey}`)
 
       try {
-        await this.context.clearIndex(absolutePath)
-        console.log(`[CLEAR] Successfully cleared index for: ${absolutePath}`)
+        await this.context.clearIndex(portableKey)
+        console.log(`[CLEAR] Successfully cleared index for: ${portableKey}`)
       }
       catch (error: any) {
-        const errorMsg = `Failed to clear ${absolutePath}: ${error.message}`
+        const errorMsg = `Failed to clear ${portableKey}: ${error.message}`
         console.error(`[CLEAR] ${errorMsg}`)
         return {
           content: [{
@@ -753,7 +819,7 @@ export class ToolHandlers {
       }
 
       // Completely remove the cleared codebase from snapshot
-      this.snapshotManager.removeCodebaseCompletely(absolutePath)
+      this.snapshotManager.removeCodebaseCompletely(portableKey)
 
       // Reset indexing stats if this was the active codebase
       this.indexingStats = null
@@ -761,7 +827,7 @@ export class ToolHandlers {
       // Save snapshot after clearing index
       this.snapshotManager.saveCodebaseSnapshot()
 
-      let resultText = `Successfully cleared codebase '${absolutePath}'`
+      let resultText = `Successfully cleared codebase '${portableKey}'`
 
       const remainingIndexed = this.snapshotManager.getIndexedCodebases().length
       const remainingIndexing = this.snapshotManager.getIndexingCodebases().length
@@ -804,7 +870,7 @@ export class ToolHandlers {
   }
 
   public async handleGetIndexingStatus(args: any) {
-    const { path: codebasePath } = args
+    const { path: codebasePath, base_path: basePath } = args
 
     try {
       // Force absolute path resolution
@@ -833,9 +899,24 @@ export class ToolHandlers {
         }
       }
 
+      // Resolve portable key for status lookup
+      let portableKey: string
+      try {
+        portableKey = resolvePortableKey(absolutePath, basePath)
+      }
+      catch (error: any) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Error: ${error.message}`,
+          }],
+          isError: true,
+        }
+      }
+
       // Check indexing status using new status system
-      const status = this.snapshotManager.getCodebaseStatus(absolutePath)
-      const info = this.snapshotManager.getCodebaseInfo(absolutePath)
+      const status = this.snapshotManager.getCodebaseStatus(portableKey)
+      const info = this.snapshotManager.getCodebaseInfo(portableKey)
 
       let statusMessage = ''
 

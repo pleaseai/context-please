@@ -36,10 +36,15 @@ export class SnapshotManager {
   private loadV1Format(snapshot: CodebaseSnapshotV1): void {
     console.log('[SNAPSHOT-DEBUG] Loading v1 format snapshot')
 
-    // Validate that the codebases still exist
+    // Validate that the codebases still exist (skip check for portable keys which are relative paths)
     const validCodebases: string[] = []
     for (const codebasePath of snapshot.indexedCodebases) {
-      if (fs.existsSync(codebasePath)) {
+      if (!path.isAbsolute(codebasePath)) {
+        // Portable key (relative path) — skip filesystem validation
+        validCodebases.push(codebasePath)
+        console.log(`[SNAPSHOT-DEBUG] Validated portable codebase key: ${codebasePath}`)
+      }
+      else if (fs.existsSync(codebasePath)) {
         validCodebases.push(codebasePath)
         console.log(`[SNAPSHOT-DEBUG] Validated codebase: ${codebasePath}`)
       }
@@ -62,9 +67,11 @@ export class SnapshotManager {
     }
 
     for (const codebasePath of indexingCodebasesList) {
-      if (fs.existsSync(codebasePath)) {
+      if (!path.isAbsolute(codebasePath)) {
+        console.warn(`[SNAPSHOT-DEBUG] Found interrupted portable indexing codebase: ${codebasePath}. Treating as not indexed.`)
+      }
+      else if (fs.existsSync(codebasePath)) {
         console.warn(`[SNAPSHOT-DEBUG] Found interrupted indexing codebase: ${codebasePath}. Treating as not indexed.`)
-        // Don't add to validIndexingCodebases - treat as not indexed
       }
       else {
         console.warn(`[SNAPSHOT-DEBUG] Interrupted indexing codebase no longer exists: ${codebasePath}`)
@@ -103,7 +110,8 @@ export class SnapshotManager {
     const validCodebaseInfoMap = new Map<string, CodebaseInfo>()
 
     for (const [codebasePath, info] of Object.entries(snapshot.codebases)) {
-      if (!fs.existsSync(codebasePath)) {
+      // Skip filesystem validation for portable keys (relative paths)
+      if (path.isAbsolute(codebasePath) && !fs.existsSync(codebasePath)) {
         console.warn(`[SNAPSHOT-DEBUG] Codebase no longer exists, removing: ${codebasePath}`)
         continue
       }

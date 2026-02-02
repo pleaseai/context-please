@@ -592,6 +592,91 @@ Clear the search index for a specific codebase.
 
 Get the current indexing status of a codebase. Shows progress percentage for actively indexing codebases and completion status for indexed codebases.
 
+### Portable Indexes with `base_path`
+
+All four tools accept an optional `base_path` parameter that enables **portable, shareable vector indexes** across different machines and environments.
+
+#### The Problem
+
+By default, collection names are derived from the absolute filesystem path. An index created on machine A at `/home/alice/project/vendor/lib` produces a different collection hash than the same code on machine B at `/Users/bob/project/vendor/lib`. This means cloud-synced vector indexes cannot be shared across machines.
+
+#### The Solution
+
+The `base_path` parameter strips a common prefix from the path before hashing, producing a **machine-independent collection key**:
+
+```
+index_codebase(path="/home/alice/project/vendor/lib", base_path="/home/alice/project")
+  -> collection key: "vendor/lib"
+  -> collection hash: MD5("vendor/lib") -> deterministic, same on every machine
+
+search_code(path="/Users/bob/project/vendor/lib", base_path="/Users/bob/project", query="...")
+  -> collection key: "vendor/lib"
+  -> finds the same collection, returns results with relative paths
+```
+
+#### Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `base_path` | No | Absolute path prefix to strip. Must be a parent directory of `path`. When omitted, behavior is identical to previous versions. |
+
+#### Usage Examples
+
+**Index a vendor directory portably:**
+```json
+{
+  "path": "/var/www/html/vendor/hyva-themes",
+  "base_path": "/var/www/html"
+}
+```
+This creates a collection keyed on `vendor/hyva-themes` instead of the full absolute path. File paths stored in the index will be relative to `base_path` (e.g., `vendor/hyva-themes/src/ViewModel/Cart.php`).
+
+**Search from a different machine:**
+```json
+{
+  "path": "/Users/dev/project/vendor/hyva-themes",
+  "base_path": "/Users/dev/project",
+  "query": "cart totals calculation"
+}
+```
+This resolves to the same `vendor/hyva-themes` collection key, finding the shared index.
+
+**Clear a portable index:**
+```json
+{
+  "path": "/var/www/html/vendor/hyva-themes",
+  "base_path": "/var/www/html"
+}
+```
+
+#### Rules
+
+- `base_path` must be an **absolute path**
+- `base_path` must be a **parent directory** of `path` (not equal to it)
+- The same `base_path` must be used consistently for indexing, searching, clearing, and status checks on a given collection
+- When `base_path` is omitted, the tool behaves identically to previous versions (full backward compatibility)
+
+#### For AI Agents
+
+When instructing an AI coding agent to use context-please with portable indexes, include these guidelines:
+
+1. **Determine the project root** as the `base_path` value (e.g., the directory containing `.git`, `composer.json`, or `package.json`)
+2. **Use `base_path` consistently** across all `index_codebase`, `search_code`, `clear_index`, and `get_indexing_status` calls for the same codebase
+3. **The `path` parameter remains the absolute filesystem path** to the directory being indexed or searched
+4. **Results will contain relative paths** from `base_path`, which are portable and meaningful across environments
+
+Example instruction for an AI agent's system prompt or CLAUDE.md:
+
+```
+When using context-please MCP tools, always pass base_path equal to the project
+root directory. For example, if the project is at /var/www/html:
+
+  index_codebase(path="/var/www/html/vendor/magento", base_path="/var/www/html")
+  search_code(path="/var/www/html/vendor/magento", base_path="/var/www/html", query="...")
+
+This ensures indexes are portable across development environments.
+```
+
 ---
 
 ## 📊 Evaluation
