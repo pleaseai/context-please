@@ -163,7 +163,8 @@ export class ToolHandlers {
   }
 
   public async handleIndexCodebase(args: any) {
-    const { path: codebasePath, force, splitter, customExtensions, ignorePatterns, base_path: basePath } = args
+    const { path: codebasePath, force, splitter, customExtensions, ignorePatterns, base_path: basePathArg } = args
+    const basePath = basePathArg || process.env.DEFAULT_BASE_PATH || undefined
     const forceReindex = force || false
     const splitterType = splitter || 'ast' // Default to AST
     const customFileExtensions = customExtensions || []
@@ -470,7 +471,8 @@ export class ToolHandlers {
   }
 
   public async handleSearchCode(args: any) {
-    const { path: codebasePath, query, limit = 10, extensionFilter, base_path: basePath } = args
+    const { path: codebasePath, query, limit = 10, extensionFilter, base_path: basePathArg } = args
+    const basePath = basePathArg || process.env.DEFAULT_BASE_PATH || undefined
     const resultLimit = limit || 10
 
     try {
@@ -737,7 +739,8 @@ export class ToolHandlers {
   }
 
   public async handleClearIndex(args: any) {
-    const { path: codebasePath, base_path: basePath } = args
+    const { path: codebasePath, base_path: basePathArg } = args
+    const basePath = basePathArg || process.env.DEFAULT_BASE_PATH || undefined
 
     if (this.snapshotManager.getIndexedCodebases().length === 0 && this.snapshotManager.getIndexingCodebases().length === 0) {
       return {
@@ -878,7 +881,8 @@ export class ToolHandlers {
   }
 
   public async handleGetIndexingStatus(args: any) {
-    const { path: codebasePath, base_path: basePath } = args
+    const { path: codebasePath, base_path: basePathArg } = args
+    const basePath = basePathArg || process.env.DEFAULT_BASE_PATH || undefined
 
     try {
       // Force absolute path resolution
