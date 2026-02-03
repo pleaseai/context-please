@@ -626,16 +626,14 @@ describe('tool Handlers Integration', () => {
       expect(result.content[0].text).toContain('Re-index with force=true')
     })
 
-    it('should show hard failure when all embeddings failed (indexStatus: failed)', async () => {
-      // Arrange: Set codebase as indexed but with all batches failed
-      snapshotManager.setCodebaseIndexed(fixturesPath, {
-        indexedFiles: 10,
-        totalChunks: 100,
-        status: 'failed',
-        insertedChunks: 0,
-        failedBatches: 5,
-        failedChunks: 100,
-      })
+    it('should show hard failure when all embeddings failed', async () => {
+      // Arrange: Set codebase as failed (all embedding batches failed)
+      // When status === 'failed', handlers use setCodebaseIndexFailed() instead of setCodebaseIndexed()
+      snapshotManager.setCodebaseIndexFailed(
+        fixturesPath,
+        'All embedding batches failed. 100 chunks could not be inserted.',
+        100, // Indexing completed but all embeddings failed
+      )
 
       const args = { path: fixturesPath }
 
@@ -644,9 +642,9 @@ describe('tool Handlers Integration', () => {
 
       // Assert
       expect(result.isError).not.toBe(true)
-      expect(result.content[0].text).toContain('0/100')
-      // Should indicate this is a hard failure, not just partial
-      expect(result.content[0].text).toContain('failed')
+      expect(result.content[0].text).toContain('indexing failed')
+      expect(result.content[0].text).toContain('All embedding batches failed')
+      expect(result.content[0].text).toContain('retry')
     })
 
     it('should show inserted/total chunks format when failure stats are available', async () => {
