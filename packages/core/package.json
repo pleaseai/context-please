@@ -61,6 +61,7 @@
     "@types/node": "^20.0.0",
     "@vitest/coverage-v8": "^2.1.8",
     "memfs": "^4.14.0",
+    "testcontainers": "^10.24.2",
     "vitest": "^2.1.8"
   },
   "publishConfig": {
