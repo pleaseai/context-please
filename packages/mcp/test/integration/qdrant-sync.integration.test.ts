@@ -1,35 +1,47 @@
+import type { StartedQdrantContainer } from '@testcontainers/qdrant'
 import * as path from 'node:path'
 import { Context, QdrantVectorDatabase } from '@pleaseai/context-please-core'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { QdrantContainer } from '@testcontainers/qdrant'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { FakeEmbedding } from '../../../core/test/doubles/fake-embedding.js'
 import { ToolHandlers } from '../../src/handlers.js'
 import { FakeSnapshotManager } from '../doubles/fake-snapshot-manager.js'
 
 /**
- * Integration test for Qdrant-specific syncIndexedCodebasesFromCloud() issue
- *
- * Reproduces the bug where:
- * 1. Background indexing starts (collection created but empty)
- * 2. syncIndexedCodebasesFromCloud() is called
- * 3. Empty collection causes codebase to be removed from snapshot
- * 4. search_code returns "not indexed" error
+ * Integration test for Qdrant sync during background indexing.
+ * Uses Testcontainers to automatically manage Qdrant instances.
  */
 describe('qdrant Sync During Background Indexing', () => {
+  let container: StartedQdrantContainer | undefined
   let handlers: ToolHandlers
   let context: Context
   let snapshotManager: FakeSnapshotManager
   let qdrantDb: QdrantVectorDatabase
   let fixturesPath: string
 
-  // Use real Qdrant if available, otherwise skip tests
-  const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333'
-  const skipQdrant = !process.env.QDRANT_URL && !process.env.CI
+  // Docker availability check - tests will be skipped if Docker is not available
+  let skipTests = false
+
+  beforeAll(async () => {
+    try {
+      // Start Qdrant container with specific version for test determinism
+      container = await new QdrantContainer('qdrant/qdrant:v1.12.5').start()
+    }
+    catch (error) {
+      console.warn('⚠️ Docker not available, skipping Qdrant tests:', (error as Error).message)
+      skipTests = true
+    }
+  }, 120000) // 120 second timeout for image download
 
   beforeEach(async () => {
-    if (skipQdrant) {
-      console.log('⏭️  Skipping Qdrant tests (QDRANT_URL not set)')
+    if (skipTests || !container) {
       return
     }
+
+    // Get dynamic port from container
+    const host = container.getHost()
+    const grpcPort = container.getMappedPort(6334)
+    const qdrantUrl = `http://${host}:${grpcPort}`
 
     // Create real Qdrant connection
     qdrantDb = new QdrantVectorDatabase({
@@ -54,24 +66,26 @@ describe('qdrant Sync During Background Indexing', () => {
   })
 
   afterEach(async () => {
-    if (skipQdrant)
+    if (skipTests || !container) {
       return
+    }
 
     // Clean up: Clear any test collections
     try {
       await context.clearIndex(fixturesPath)
     }
-    catch (e) {
+    catch {
       // Ignore if collection doesn't exist
     }
 
     snapshotManager.reset()
   })
 
-  it('should reproduce: syncIndexedCodebasesFromCloud removes indexing codebase from snapshot', async () => {
-    if (skipQdrant)
-      return
+  afterAll(async () => {
+    await container?.stop()
+  })
 
+  it.skipIf(() => skipTests)('should reproduce: syncIndexedCodebasesFromCloud removes indexing codebase from snapshot', async () => {
     // Arrange: Simulate background indexing starting
     // 1. Create collection (happens during indexing initialization)
     const collectionName = context.getCollectionName(fixturesPath)
@@ -94,10 +108,7 @@ describe('qdrant Sync During Background Indexing', () => {
     expect(indexingCodebases).toContain(fixturesPath)
   })
 
-  it('should fix: syncIndexedCodebasesFromCloud preserves indexing codebases', async () => {
-    if (skipQdrant)
-      return
-
+  it.skipIf(() => skipTests)('should fix: syncIndexedCodebasesFromCloud preserves indexing codebases', async () => {
     // Arrange: Same setup as above
     const collectionName = context.getCollectionName(fixturesPath)
     await qdrantDb.createCollection(collectionName, 1536, { useSparse: true })
@@ -115,10 +126,7 @@ describe('qdrant Sync During Background Indexing', () => {
     expect(allCodebases.length).toBeGreaterThan(0)
   })
 
-  it('should allow search during indexing after sync', async () => {
-    if (skipQdrant)
-      return
-
+  it.skipIf(() => skipTests)('should allow search during indexing after sync', async () => {
     // Arrange: Fully index a codebase
     await context.indexCodebase(fixturesPath)
     snapshotManager.setCodebaseIndexing(fixturesPath, 50)
@@ -139,10 +147,7 @@ describe('qdrant Sync During Background Indexing', () => {
     expect(searchResult.content[0].text).toContain('Indexing in Progress')
   })
 
-  it('should handle completed indexing correctly after sync', async () => {
-    if (skipQdrant)
-      return
-
+  it.skipIf(() => skipTests)('should handle completed indexing correctly after sync', async () => {
     // Arrange: Fully index and mark as completed
     await context.indexCodebase(fixturesPath)
     snapshotManager.setCodebaseIndexed(fixturesPath, {
@@ -169,10 +174,7 @@ describe('qdrant Sync During Background Indexing', () => {
     expect(searchResult.content[0].text).toContain('Found')
   })
 
-  it('should remove truly orphaned indexed codebases from snapshot', async () => {
-    if (skipQdrant)
-      return
-
+  it.skipIf(() => skipTests)('should remove truly orphaned indexed codebases from snapshot', async () => {
     // Arrange: Add a codebase to snapshot that has NO collection in Qdrant
     // This codebase is marked as "indexed" (not "indexing"), so it should be removed
     const orphanedPath = '/tmp/orphaned-codebase-that-never-existed'
@@ -193,10 +195,7 @@ describe('qdrant Sync During Background Indexing', () => {
     expect(indexedCodebases).not.toContain(orphanedPath)
   })
 
-  it('should NOT remove orphaned indexing codebases from snapshot', async () => {
-    if (skipQdrant)
-      return
-
+  it.skipIf(() => skipTests)('should NOT remove orphaned indexing codebases from snapshot', async () => {
     // Arrange: Add a codebase that is currently "indexing" but has no collection yet
     // This simulates the race condition where sync happens before collection is created
     const indexingOrphanPath = '/tmp/indexing-orphan-codebase'
@@ -213,10 +212,7 @@ describe('qdrant Sync During Background Indexing', () => {
     expect(indexingCodebases).toContain(indexingOrphanPath)
   })
 
-  it('should handle empty collections during indexing gracefully', async () => {
-    if (skipQdrant)
-      return
-
+  it.skipIf(() => skipTests)('should handle empty collections during indexing gracefully', async () => {
     // Arrange: Create collection but don't insert any documents yet
     const collectionName = context.getCollectionName(fixturesPath)
     await qdrantDb.createCollection(collectionName, 1536, { useSparse: true })

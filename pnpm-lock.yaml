@@ -188,6 +188,9 @@ importers:
         specifier: ^3.25.55
         version: 3.25.55
     devDependencies:
+      '@testcontainers/qdrant':
+        specifier: ^10.24.2
+        version: 10.28.0
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.0
