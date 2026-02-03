@@ -403,15 +403,26 @@ export class ToolHandlers {
       })
       console.log(`[BACKGROUND-INDEX] ✅ Indexing completed! Files: ${stats.indexedFiles}, Inserted: ${stats.insertedChunks}/${stats.totalChunks} chunks`)
 
-      // Set codebase to indexed status with complete statistics
-      this.snapshotManager.setCodebaseIndexed(absolutePath, {
-        indexedFiles: stats.indexedFiles,
-        totalChunks: stats.totalChunks,
-        status: stats.status,
-        insertedChunks: stats.insertedChunks,
-        failedBatches: stats.failedBatches,
-        failedChunks: stats.failedChunks,
-      })
+      // Set codebase status based on indexing result
+      if (stats.status === 'failed') {
+        // All embedding batches failed - mark as failed, not indexed
+        this.snapshotManager.setCodebaseIndexFailed(
+          absolutePath,
+          `All embedding batches failed. ${stats.failedChunks} chunks could not be inserted.`,
+          100, // Indexing completed but all embeddings failed
+        )
+      }
+      else {
+        // Indexing succeeded (fully or partially) - mark as indexed
+        this.snapshotManager.setCodebaseIndexed(absolutePath, {
+          indexedFiles: stats.indexedFiles,
+          totalChunks: stats.totalChunks,
+          status: stats.status,
+          insertedChunks: stats.insertedChunks,
+          failedBatches: stats.failedBatches,
+          failedChunks: stats.failedChunks,
+        })
+      }
       this.indexingStats = {
         indexedFiles: stats.indexedFiles,
         totalChunks: stats.totalChunks,

@@ -291,7 +291,7 @@ export class SnapshotManager {
     stats: {
       indexedFiles: number
       totalChunks: number
-      status: 'completed' | 'completed_with_errors' | 'failed' | 'limit_reached'
+      status: 'completed' | 'completed_with_errors' | 'limit_reached'
       insertedChunks?: number
       failedBatches?: number
       failedChunks?: number
