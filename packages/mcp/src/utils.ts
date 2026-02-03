@@ -68,10 +68,9 @@ export function resolvePortableKey(absolutePath: string, basePath?: string): str
   }
 
   if (relative === '') {
-    throw new Error(
-      `base_path '${basePath}' and path '${absolutePath}' resolve to the same directory. `
-      + `base_path must be a parent directory of path.`,
-    )
+    // path equals base_path — return a root sentinel so multi-collection
+    // prefix search can discover all collections under this base.
+    return '.'
   }
 
   return relative
