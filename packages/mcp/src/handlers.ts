@@ -860,7 +860,16 @@ export class ToolHandlers {
           if (info && 'indexedFiles' in info) {
             const indexedInfo = info as any
             const hasFailures = indexedInfo.failedBatches && indexedInfo.failedBatches > 0
-            if (hasFailures) {
+            const hardFailure =
+              (indexedInfo.indexStatus === 'failed') ||
+              (indexedInfo.insertedChunks !== undefined &&
+                indexedInfo.insertedChunks === 0 &&
+                !!hasFailures)
+
+            if (hardFailure) {
+              statusMessage = `❌ Codebase '${absolutePath}' indexing failed; no usable embeddings are available for search.`
+            }
+            else if (hasFailures) {
               statusMessage = `⚠️  Codebase '${absolutePath}' is indexed but some embeddings failed.`
             }
             else {
