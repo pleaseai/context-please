@@ -592,6 +592,125 @@ Clear the search index for a specific codebase.
 
 Get the current indexing status of a codebase. Shows progress percentage for actively indexing codebases and completion status for indexed codebases.
 
+### Portable Indexes with `base_path`
+
+All four tools accept an optional `base_path` parameter that enables **portable, shareable vector indexes** across different machines and environments.
+
+#### The Problem
+
+By default, collection names are derived from the absolute filesystem path. An index created on machine A at `/home/alice/project/vendor/lib` produces a different collection hash than the same code on machine B at `/Users/bob/project/vendor/lib`. This means cloud-synced vector indexes cannot be shared across machines.
+
+#### The Solution
+
+The `base_path` parameter strips a common prefix from the path before hashing, producing a **machine-independent collection key**:
+
+```
+index_codebase(path="/home/alice/project/vendor/lib", base_path="/home/alice/project")
+  -> collection key: "vendor/lib"
+  -> collection hash: MD5("vendor/lib") -> deterministic, same on every machine
+
+search_code(path="/Users/bob/project/vendor/lib", base_path="/Users/bob/project", query="...")
+  -> collection key: "vendor/lib"
+  -> finds the same collection, returns results with relative paths
+```
+
+#### Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `base_path` | No | Absolute path prefix to strip. Must be a parent directory of `path`. Falls back to `DEFAULT_BASE_PATH` env var if not provided. When neither is set, behavior is identical to previous versions. |
+
+#### Environment Variable: `DEFAULT_BASE_PATH`
+
+Instead of passing `base_path` on every tool call, you can set `DEFAULT_BASE_PATH` in the MCP server configuration. This acts as a persistent default that applies to all calls unless overridden by an explicit `base_path` parameter.
+
+**MCP config example (`.mcp.json`):**
+```json
+{
+  "context-please": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@anthropic/context-please-mcp"],
+    "env": {
+      "VECTOR_DB_TYPE": "milvus",
+      "MILVUS_ADDRESS": "your-milvus-host:19530",
+      "DEFAULT_BASE_PATH": "/var/www/html"
+    }
+  }
+}
+```
+
+With this set, all tool calls automatically use `/var/www/html` as the base path. An explicit `base_path` parameter on any individual call overrides the env var.
+
+**Resolution order:** explicit `base_path` parameter > `DEFAULT_BASE_PATH` env var > no base path (absolute path behavior)
+
+#### Usage Examples
+
+**Index a vendor directory portably:**
+```json
+{
+  "path": "/var/www/html/vendor/hyva-themes",
+  "base_path": "/var/www/html"
+}
+```
+This creates a collection keyed on `vendor/hyva-themes` instead of the full absolute path. File paths stored in the index will be relative to `base_path` (e.g., `vendor/hyva-themes/src/ViewModel/Cart.php`).
+
+**Search from a different machine:**
+```json
+{
+  "path": "/Users/dev/project/vendor/hyva-themes",
+  "base_path": "/Users/dev/project",
+  "query": "cart totals calculation"
+}
+```
+This resolves to the same `vendor/hyva-themes` collection key, finding the shared index.
+
+**Clear a portable index:**
+```json
+{
+  "path": "/var/www/html/vendor/hyva-themes",
+  "base_path": "/var/www/html"
+}
+```
+
+#### Rules
+
+- `base_path` must be an **absolute path**
+- `base_path` must be a **parent directory** of `path` (not equal to it)
+- The same `base_path` must be used consistently for indexing, searching, clearing, and status checks on a given collection
+- When neither `base_path` nor `DEFAULT_BASE_PATH` is set, the tool behaves identically to previous versions (full backward compatibility)
+- An explicit `base_path` parameter always overrides `DEFAULT_BASE_PATH`
+
+#### For AI Agents
+
+When instructing an AI coding agent to use context-please with portable indexes, there are two approaches:
+
+**Approach 1: Set `DEFAULT_BASE_PATH` in MCP config (recommended)**
+
+Configure the env var in `.mcp.json` so agents don't need to know about `base_path` at all. All calls automatically use portable collection keys. No agent instructions needed.
+
+**Approach 2: Instruct the agent to pass `base_path` explicitly**
+
+If you can't set the env var, include these guidelines for the agent:
+
+1. **Determine the project root** as the `base_path` value (e.g., the directory containing `.git`, `composer.json`, or `package.json`)
+2. **Use `base_path` consistently** across all `index_codebase`, `search_code`, `clear_index`, and `get_indexing_status` calls for the same codebase
+3. **The `path` parameter remains the absolute filesystem path** to the directory being indexed or searched
+4. **Results will contain relative paths** from `base_path`, which are portable and meaningful across environments
+
+Example instruction for an AI agent's system prompt or CLAUDE.md:
+
+```
+When using context-please MCP tools, always pass base_path equal to the project
+root directory. For example, if the project is at /var/www/html:
+
+  index_codebase(path="/var/www/html/vendor/magento", base_path="/var/www/html")
+  search_code(path="/var/www/html/vendor/magento", base_path="/var/www/html", query="...")
+
+This ensures indexes are portable across development environments.
+Alternatively, set DEFAULT_BASE_PATH=/var/www/html in the MCP server env config.
+```
+
 ---
 
 ## 📊 Evaluation

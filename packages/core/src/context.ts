@@ -271,7 +271,11 @@ export class Context {
    */
   public getCollectionName(codebasePath: string): string {
     const isHybrid = this.getIsHybrid()
-    const normalizedPath = path.resolve(codebasePath)
+    // When input is a portable key (relative path), hash it directly.
+    // When input is absolute, resolve it first for backward compatibility.
+    const normalizedPath = path.isAbsolute(codebasePath)
+      ? path.resolve(codebasePath)
+      : codebasePath
     const hash = crypto.createHash('md5').update(normalizedPath).digest('hex')
     const prefix = isHybrid === true ? 'hybrid_code_chunks' : 'code_chunks'
     return `${prefix}_${hash.substring(0, 8)}`
@@ -288,23 +292,26 @@ export class Context {
     codebasePath: string,
     progressCallback?: (progress: { phase: string, current: number, total: number, percentage: number }) => void,
     forceReindex: boolean = false,
+    options?: { collectionKey?: string, relativizationRoot?: string },
   ): Promise<{ indexedFiles: number, totalChunks: number, status: 'completed' | 'limit_reached' }> {
+    const effectiveKey = options?.collectionKey || codebasePath
+    const effectiveRoot = options?.relativizationRoot || codebasePath
     const isHybrid = this.getIsHybrid()
     const searchType = isHybrid === true ? 'hybrid search' : 'semantic search'
-    console.log(`[Context] 🚀 Starting to index codebase with ${searchType}: ${codebasePath}`)
+    console.log(`[Context] Starting to index codebase with ${searchType}: ${codebasePath} (collectionKey: ${effectiveKey})`)
 
     // 1. Load ignore patterns from various ignore files
     await this.loadIgnorePatterns(codebasePath)
 
-    // 2. Check and prepare vector collection
+    // 2. Check and prepare vector collection (using effectiveKey for collection name)
     progressCallback?.({ phase: 'Preparing collection...', current: 0, total: 100, percentage: 0 })
     console.log(`Debug2: Preparing vector collection for codebase${forceReindex ? ' (FORCE REINDEX)' : ''}`)
-    await this.prepareCollection(codebasePath, forceReindex)
+    await this.prepareCollection(effectiveKey, forceReindex)
 
-    // 3. Recursively traverse codebase to get all supported files
+    // 3. Recursively traverse codebase to get all supported files (using absolute path for filesystem)
     progressCallback?.({ phase: 'Scanning files...', current: 5, total: 100, percentage: 5 })
     const codeFiles = await this.getCodeFiles(codebasePath)
-    console.log(`[Context] 📁 Found ${codeFiles.length} code files`)
+    console.log(`[Context] Found ${codeFiles.length} code files`)
 
     if (codeFiles.length === 0) {
       progressCallback?.({ phase: 'No files to index', current: 100, total: 100, percentage: 100 })
@@ -324,7 +331,7 @@ export class Context {
         // Calculate progress percentage
         const progressPercentage = indexingStartPercentage + (fileIndex / totalFiles) * indexingRange
 
-        console.log(`[Context] 📊 Processed ${fileIndex}/${totalFiles} files`)
+        console.log(`[Context] Processed ${fileIndex}/${totalFiles} files`)
         progressCallback?.({
           phase: `Processing files (${fileIndex}/${totalFiles})...`,
           current: fileIndex,
@@ -332,9 +339,11 @@ export class Context {
           percentage: Math.round(progressPercentage),
         })
       },
+      effectiveKey,
+      effectiveRoot,
     )
 
-    console.log(`[Context] ✅ Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`)
+    console.log(`[Context] Codebase indexing completed! Processed ${result.processedFiles} files in total, generated ${result.totalChunks} code chunks`)
 
     progressCallback?.({
       phase: 'Indexing complete!',
@@ -870,17 +879,23 @@ export class Context {
     filePaths: string[],
     codebasePath: string,
     onFileProcessed?: (filePath: string, fileIndex: number, totalFiles: number) => void,
+    collectionKey?: string,
+    relativizationRoot?: string,
   ): Promise<{ processedFiles: number, totalChunks: number, status: 'completed' | 'limit_reached' }> {
     const isHybrid = this.getIsHybrid()
     const EMBEDDING_BATCH_SIZE = Math.max(1, Number.parseInt(envManager.get('EMBEDDING_BATCH_SIZE') || '100', 10))
     const CHUNK_LIMIT = 450000
     console.log(`[Context] 🔧 Using EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE}`)
 
+    // Resolve effective collection key and relativization root
+    const effectiveKey = collectionKey || codebasePath
+    const effectiveRoot = relativizationRoot || codebasePath
+
     // For Qdrant hybrid search, we need to train BM25 on the full corpus first
     const needsBM25Training = isHybrid && this.vectorDatabase instanceof QdrantVectorDatabase
-    const allChunks: Array<{ chunk: CodeChunk, codebasePath: string }> = []
+    const allChunks: Array<{ chunk: CodeChunk, codebasePath: string, collectionKey: string, relativizationRoot: string }> = []
 
-    let chunkBuffer: Array<{ chunk: CodeChunk, codebasePath: string }> = []
+    let chunkBuffer: Array<{ chunk: CodeChunk, codebasePath: string, collectionKey: string, relativizationRoot: string }> = []
     let processedFiles = 0
     let totalChunks = 0
     let limitReached = false
@@ -907,10 +922,10 @@ export class Context {
 
           // For Qdrant hybrid, collect all chunks. For others, add to buffer.
           if (needsBM25Training) {
-            allChunks.push({ chunk, codebasePath })
+            allChunks.push({ chunk, codebasePath, collectionKey: effectiveKey, relativizationRoot: effectiveRoot })
           }
           else {
-            chunkBuffer.push({ chunk, codebasePath })
+            chunkBuffer.push({ chunk, codebasePath, collectionKey: effectiveKey, relativizationRoot: effectiveRoot })
           }
 
           // Process batch when buffer reaches EMBEDDING_BATCH_SIZE (skip for Qdrant hybrid)
@@ -959,7 +974,7 @@ export class Context {
 
       // Get BM25 generator and train it
       if (this.vectorDatabase instanceof QdrantVectorDatabase) {
-        const collectionName = this.getCollectionName(codebasePath)
+        const collectionName = this.getCollectionName(effectiveKey)
         const bm25Generator = this.vectorDatabase.getBM25Generator()
         bm25Generator.learn(corpus)
         console.log(`[Context] ✅ BM25 training completed on ${corpus.length} documents`)
@@ -1009,27 +1024,30 @@ export class Context {
   /**
    * Process accumulated chunk buffer
    */
-  private async processChunkBuffer(chunkBuffer: Array<{ chunk: CodeChunk, codebasePath: string }>): Promise<void> {
+  private async processChunkBuffer(chunkBuffer: Array<{ chunk: CodeChunk, codebasePath: string, collectionKey?: string, relativizationRoot?: string }>): Promise<void> {
     if (chunkBuffer.length === 0)
       return
 
-    // Extract chunks and ensure they all have the same codebasePath
+    // Extract chunks and metadata from buffer
     const chunks = chunkBuffer.map((item) => item.chunk)
     const codebasePath = chunkBuffer[0].codebasePath
+    const bufferCollectionKey = chunkBuffer[0].collectionKey
+    const bufferRelativizationRoot = chunkBuffer[0].relativizationRoot
 
     // Estimate tokens (rough estimation: 1 token ≈ 4 characters)
     const estimatedTokens = chunks.reduce((sum, chunk) => sum + Math.ceil(chunk.content.length / 4), 0)
 
     const isHybrid = this.getIsHybrid()
     const searchType = isHybrid === true ? 'hybrid' : 'regular'
-    console.log(`[Context] 🔄 Processing batch of ${chunks.length} chunks (~${estimatedTokens} tokens) for ${searchType}`)
-    await this.processChunkBatch(chunks, codebasePath)
+    console.log(`[Context] Processing batch of ${chunks.length} chunks (~${estimatedTokens} tokens) for ${searchType}`)
+    await this.processChunkBatch(chunks, bufferRelativizationRoot || codebasePath, bufferCollectionKey || codebasePath)
   }
 
   /**
    * Process a batch of chunks
    */
-  private async processChunkBatch(chunks: CodeChunk[], codebasePath: string): Promise<void> {
+  private async processChunkBatch(chunks: CodeChunk[], relativizationRoot: string, collectionKey?: string): Promise<void> {
+    const effectiveKey = collectionKey || relativizationRoot
     const isHybrid = this.getIsHybrid()
 
     // Generate embedding vectors
@@ -1043,7 +1061,7 @@ export class Context {
           throw new Error(`Missing filePath in chunk metadata at index ${index}`)
         }
 
-        const relativePath = path.relative(codebasePath, chunk.metadata.filePath)
+        const relativePath = path.relative(relativizationRoot, chunk.metadata.filePath)
         const fileExtension = path.extname(chunk.metadata.filePath)
         const { filePath, startLine, endLine, ...restMetadata } = chunk.metadata
 
@@ -1057,7 +1075,7 @@ export class Context {
           fileExtension,
           metadata: {
             ...restMetadata,
-            codebasePath,
+            codebasePath: effectiveKey,
             language: chunk.metadata.language || 'unknown',
             chunkIndex: index,
           },
@@ -1065,7 +1083,7 @@ export class Context {
       })
 
       // Store to vector database
-      await this.vectorDatabase.insertHybrid(this.getCollectionName(codebasePath), documents)
+      await this.vectorDatabase.insertHybrid(this.getCollectionName(effectiveKey), documents)
     }
     else {
       // Create regular vector documents
@@ -1074,7 +1092,7 @@ export class Context {
           throw new Error(`Missing filePath in chunk metadata at index ${index}`)
         }
 
-        const relativePath = path.relative(codebasePath, chunk.metadata.filePath)
+        const relativePath = path.relative(relativizationRoot, chunk.metadata.filePath)
         const fileExtension = path.extname(chunk.metadata.filePath)
         const { filePath, startLine, endLine, ...restMetadata } = chunk.metadata
 
@@ -1088,7 +1106,7 @@ export class Context {
           fileExtension,
           metadata: {
             ...restMetadata,
-            codebasePath,
+            codebasePath: effectiveKey,
             language: chunk.metadata.language || 'unknown',
             chunkIndex: index,
           },
@@ -1096,7 +1114,7 @@ export class Context {
       })
 
       // Store to vector database
-      await this.vectorDatabase.insert(this.getCollectionName(codebasePath), documents)
+      await this.vectorDatabase.insert(this.getCollectionName(effectiveKey), documents)
     }
   }
 
