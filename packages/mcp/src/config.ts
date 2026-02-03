@@ -50,7 +50,10 @@ export interface CodebaseInfoIndexed extends CodebaseInfoBase {
   status: 'indexed'
   indexedFiles: number // Number of files indexed
   totalChunks: number // Total number of chunks generated
-  indexStatus: 'completed' | 'limit_reached' // Status from indexing result
+  indexStatus: 'completed' | 'completed_with_errors' | 'failed' | 'limit_reached' // Status from indexing result
+  insertedChunks?: number // Number of chunks actually inserted into vector DB
+  failedBatches?: number // Number of embedding batches that failed
+  failedChunks?: number // Number of chunks lost due to batch failures
 }
 
 // Index failed state - when indexing failed

@@ -67,7 +67,14 @@ export class FakeSnapshotManager {
 
   public setCodebaseIndexed(
     codebasePath: string,
-    stats: { indexedFiles: number, totalChunks: number, status: 'completed' | 'limit_reached' },
+    stats: {
+      indexedFiles: number
+      totalChunks: number
+      status: 'completed' | 'completed_with_errors' | 'failed' | 'limit_reached'
+      insertedChunks?: number
+      failedBatches?: number
+      failedChunks?: number
+    },
   ): void {
     // Add to indexed list if not already there
     if (!this.indexedCodebases.includes(codebasePath)) {
@@ -86,6 +93,9 @@ export class FakeSnapshotManager {
       totalChunks: stats.totalChunks,
       indexStatus: stats.status,
       lastUpdated: new Date().toISOString(),
+      ...(stats.insertedChunks !== undefined && { insertedChunks: stats.insertedChunks }),
+      ...(stats.failedBatches !== undefined && { failedBatches: stats.failedBatches }),
+      ...(stats.failedChunks !== undefined && { failedChunks: stats.failedChunks }),
     }
     this.codebaseInfoMap.set(codebasePath, info)
   }

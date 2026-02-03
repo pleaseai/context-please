@@ -7,7 +7,7 @@ import { ensureAbsolutePath, trackCodebasePath, truncateContent } from './utils.
 export class ToolHandlers {
   private context: Context
   private snapshotManager: SnapshotManager
-  private indexingStats: { indexedFiles: number, totalChunks: number } | null = null
+  private indexingStats: { indexedFiles: number, totalChunks: number, insertedChunks?: number, failedBatches?: number, failedChunks?: number } | null = null
   private currentWorkspace: string
 
   constructor(context: Context, snapshotManager: SnapshotManager) {
@@ -401,16 +401,32 @@ export class ToolHandlers {
 
         console.log(`[BACKGROUND-INDEX] Progress: ${progress.phase} - ${progress.percentage}% (${progress.current}/${progress.total})`)
       })
-      console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`)
+      console.log(`[BACKGROUND-INDEX] ✅ Indexing completed! Files: ${stats.indexedFiles}, Inserted: ${stats.insertedChunks}/${stats.totalChunks} chunks`)
 
       // Set codebase to indexed status with complete statistics
-      this.snapshotManager.setCodebaseIndexed(absolutePath, stats)
-      this.indexingStats = { indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks }
+      this.snapshotManager.setCodebaseIndexed(absolutePath, {
+        indexedFiles: stats.indexedFiles,
+        totalChunks: stats.totalChunks,
+        status: stats.status,
+        insertedChunks: stats.insertedChunks,
+        failedBatches: stats.failedBatches,
+        failedChunks: stats.failedChunks,
+      })
+      this.indexingStats = {
+        indexedFiles: stats.indexedFiles,
+        totalChunks: stats.totalChunks,
+        insertedChunks: stats.insertedChunks,
+        failedBatches: stats.failedBatches,
+        failedChunks: stats.failedChunks,
+      }
 
       // Save snapshot after updating codebase lists
       this.snapshotManager.saveCodebaseSnapshot()
 
-      let message = `Background indexing completed for '${absolutePath}' using ${splitterType.toUpperCase()} splitter.\nIndexed ${stats.indexedFiles} files, ${stats.totalChunks} chunks.`
+      let message = `Background indexing completed for '${absolutePath}' using ${splitterType.toUpperCase()} splitter.\nIndexed ${stats.indexedFiles} files, ${stats.insertedChunks}/${stats.totalChunks} chunks inserted.`
+      if (stats.failedBatches > 0) {
+        message += `\n⚠️  Warning: ${stats.failedBatches} embedding batch(es) failed. ${stats.failedChunks} chunks were not inserted. Consider re-indexing.`
+      }
       if (stats.status === 'limit_reached') {
         message += `\n⚠️  Warning: Indexing stopped because the chunk limit (450,000) was reached. The index may be incomplete.`
       }
@@ -843,9 +859,33 @@ export class ToolHandlers {
         case 'indexed':
           if (info && 'indexedFiles' in info) {
             const indexedInfo = info as any
-            statusMessage = `✅ Codebase '${absolutePath}' is fully indexed and ready for search.`
-            statusMessage += `\n📊 Statistics: ${indexedInfo.indexedFiles} files, ${indexedInfo.totalChunks} chunks`
+            const hasFailures = indexedInfo.failedBatches && indexedInfo.failedBatches > 0
+            const hardFailure =
+              (indexedInfo.indexStatus === 'failed') ||
+              (indexedInfo.insertedChunks !== undefined &&
+                indexedInfo.insertedChunks === 0 &&
+                !!hasFailures)
+
+            if (hardFailure) {
+              statusMessage = `❌ Codebase '${absolutePath}' indexing failed; no usable embeddings are available for search.`
+            }
+            else if (hasFailures) {
+              statusMessage = `⚠️  Codebase '${absolutePath}' is indexed but some embeddings failed.`
+            }
+            else {
+              statusMessage = `✅ Codebase '${absolutePath}' is fully indexed and ready for search.`
+            }
+            if (indexedInfo.insertedChunks !== undefined) {
+              statusMessage += `\n📊 Statistics: ${indexedInfo.indexedFiles} files, ${indexedInfo.insertedChunks}/${indexedInfo.totalChunks} chunks inserted`
+            }
+            else {
+              statusMessage += `\n📊 Statistics: ${indexedInfo.indexedFiles} files, ${indexedInfo.totalChunks} chunks`
+            }
             statusMessage += `\n📅 Status: ${indexedInfo.indexStatus}`
+            if (hasFailures) {
+              statusMessage += `\n⚠️  ${indexedInfo.failedBatches} embedding batch(es) failed, ${indexedInfo.failedChunks ?? 0} chunks not inserted`
+              statusMessage += `\n💡 Recommendation: Re-index with force=true to retry failed embeddings`
+            }
             statusMessage += `\n🕐 Last updated: ${new Date(indexedInfo.lastUpdated).toLocaleString()}`
           }
           else {
