@@ -4,6 +4,24 @@ import { QdrantContainer } from '@testcontainers/qdrant'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { QdrantVectorDatabase } from '../../src/vectordb/qdrant-vectordb.js'
 
+// Helper to create test documents with sensible defaults
+function createTestDocument(overrides: Partial<VectorDocument> & { id: string }): VectorDocument {
+  return {
+    vector: Array.from({ length: 1536 }).fill(0.1) as number[],
+    content: 'test content',
+    relativePath: 'src/test.ts',
+    startLine: 1,
+    endLine: 10,
+    fileExtension: '.ts',
+    metadata: {
+      language: 'typescript',
+      codebasePath: '/home/user/test-project',
+      chunkIndex: 0,
+    },
+    ...overrides,
+  }
+}
+
 /**
  * Integration tests for Qdrant gRPC client functionality.
  *
@@ -15,24 +33,6 @@ describe('qdrant gRPC Client Integration', () => {
   let qdrantDb: QdrantVectorDatabase
   const testCollectionName = 'test_grpc_integration'
   let skipTests = false
-
-  // Helper to create test documents with sensible defaults
-  function createTestDocument(overrides: Partial<VectorDocument> & { id: string }): VectorDocument {
-    return {
-      vector: Array.from({ length: 1536 }).fill(0.1) as number[],
-      content: 'test content',
-      relativePath: 'src/test.ts',
-      startLine: 1,
-      endLine: 10,
-      fileExtension: '.ts',
-      metadata: {
-        language: 'typescript',
-        codebasePath: '/home/user/test-project',
-        chunkIndex: 0,
-      },
-      ...overrides,
-    }
-  }
 
   // Helper to drop collection if it exists, ignoring errors
   async function dropCollectionIfExists(collectionName: string): Promise<void> {
