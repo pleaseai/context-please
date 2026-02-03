@@ -223,12 +223,15 @@ describe('qdrant gRPC Client Integration', () => {
       const emptyCollection = 'test_empty_collection'
       await qdrantDb.createHybridCollection(emptyCollection, 1536)
 
-      const results = await qdrantDb.query(emptyCollection, '', ['metadata'], 10)
+      try {
+        const results = await qdrantDb.query(emptyCollection, '', ['metadata'], 10)
 
-      expect(Array.isArray(results)).toBe(true)
-      expect(results.length).toBe(0)
-
-      await qdrantDb.dropCollection(emptyCollection)
+        expect(Array.isArray(results)).toBe(true)
+        expect(results.length).toBe(0)
+      }
+      finally {
+        await qdrantDb.dropCollection(emptyCollection)
+      }
     })
   })
 
