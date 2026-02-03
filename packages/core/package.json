@@ -56,6 +56,7 @@
     "voyageai": "^0.0.4"
   },
   "devDependencies": {
+    "@testcontainers/qdrant": "^10.24.2",
     "@types/fs-extra": "^11.0.0",
     "@types/node": "^20.0.0",
     "@vitest/coverage-v8": "^2.1.8",

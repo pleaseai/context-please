@@ -1,128 +1,115 @@
+import type { StartedQdrantContainer } from '@testcontainers/qdrant'
 import type { VectorDocument } from '../../src/vectordb/types.js'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { QdrantContainer } from '@testcontainers/qdrant'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { QdrantVectorDatabase } from '../../src/vectordb/qdrant-vectordb.js'
 
+// Helper to create test documents with sensible defaults
+function createTestDocument(overrides: Partial<VectorDocument> & { id: string }): VectorDocument {
+  return {
+    vector: Array.from({ length: 1536 }).fill(0.1) as number[],
+    content: 'test content',
+    relativePath: 'src/test.ts',
+    startLine: 1,
+    endLine: 10,
+    fileExtension: '.ts',
+    metadata: {
+      language: 'typescript',
+      codebasePath: '/home/user/test-project',
+      chunkIndex: 0,
+    },
+    ...overrides,
+  }
+}
+
 /**
- * Integration tests for Qdrant gRPC client functionality
+ * Integration tests for Qdrant gRPC client functionality.
  *
- * Tests the core gRPC operations:
- * 1. Collection operations (list, has, create, drop)
- * 2. Document insertion with protobuf payload structure
- * 3. Query with metadata extraction (including codebasePath)
- * 4. Protobuf value unwrapping (kind.case pattern)
- *
- * Note: These tests require a running Qdrant instance.
- * - On Linux CI: Qdrant runs as a Docker service container
- * - On Windows CI: Docker service containers are not supported, so tests are skipped
- * - Locally: Set QDRANT_URL environment variable to enable tests
+ * Tests use Testcontainers to automatically manage Qdrant instances.
+ * Docker is required; tests are automatically skipped if unavailable.
  */
-describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () => {
+describe('qdrant gRPC Client Integration', () => {
+  let container: StartedQdrantContainer | undefined
   let qdrantDb: QdrantVectorDatabase
   const testCollectionName = 'test_grpc_integration'
+  let skipTests = false
 
-  // Use QDRANT_URL from environment (required for tests to run)
-  const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6334' // gRPC port
+  // Helper to drop collection if it exists, ignoring errors
+  async function dropCollectionIfExists(collectionName: string): Promise<void> {
+    const exists = await qdrantDb.hasCollection(collectionName).catch(() => false)
+    if (exists) {
+      await qdrantDb.dropCollection(collectionName).catch(() => {})
+    }
+  }
+
+  beforeAll(async () => {
+    try {
+      container = await new QdrantContainer('qdrant/qdrant:v1.12.5').start()
+    }
+    catch (error) {
+      console.warn('Docker not available, skipping Qdrant tests:', (error as Error).message)
+      skipTests = true
+    }
+  }, 120000)
 
   beforeEach(async () => {
-    // Create Qdrant connection with gRPC port
-    qdrantDb = new QdrantVectorDatabase({
-      address: qdrantUrl,
-    })
+    if (skipTests || !container) {
+      return
+    }
 
-    // Clean up any existing test collection
-    try {
-      const hasCollection = await qdrantDb.hasCollection(testCollectionName)
-      if (hasCollection) {
-        await qdrantDb.dropCollection(testCollectionName)
-      }
-    }
-    catch (e) {
-      // Ignore errors during cleanup
-    }
+    const host = container.getHost()
+    const grpcPort = container.getMappedPort(6334)
+    qdrantDb = new QdrantVectorDatabase({ address: `http://${host}:${grpcPort}` })
+
+    await dropCollectionIfExists(testCollectionName)
   })
 
   afterEach(async () => {
-    // Clean up test collection
-    try {
-      const hasCollection = await qdrantDb.hasCollection(testCollectionName)
-      if (hasCollection) {
-        await qdrantDb.dropCollection(testCollectionName)
-      }
+    if (skipTests || !container) {
+      return
     }
-    catch (e) {
-      // Ignore cleanup errors
-    }
+    await dropCollectionIfExists(testCollectionName)
+  })
 
-    // Disconnect the client to avoid "session has been destroyed" errors
-    try {
-      await qdrantDb.disconnect()
-    }
-    catch (e) {
-      // Ignore disconnect errors
-    }
+  afterAll(async () => {
+    await container?.stop()
   })
 
   describe('collection Operations', () => {
-    it('should list collections using gRPC API', async () => {
-      const collections = await qdrantDb.listCollections()
-      expect(Array.isArray(collections)).toBe(true)
+    it.skipIf(() => skipTests)('should list collections', async () => {
+      expect(Array.isArray(await qdrantDb.listCollections())).toBe(true)
     })
 
-    it('should check if collection exists using gRPC API', async () => {
-      const exists = await qdrantDb.hasCollection(testCollectionName)
-      expect(exists).toBe(false)
+    it.skipIf(() => skipTests)('should check if collection exists', async () => {
+      expect(await qdrantDb.hasCollection(testCollectionName)).toBe(false)
     })
 
-    it('should create and drop collection using gRPC API', async () => {
-      // Create collection
+    it.skipIf(() => skipTests)('should create and drop collection', async () => {
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
-      // Verify it exists
-      const exists = await qdrantDb.hasCollection(testCollectionName)
-      expect(exists).toBe(true)
+      expect(await qdrantDb.hasCollection(testCollectionName)).toBe(true)
+      expect(await qdrantDb.listCollections()).toContain(testCollectionName)
 
-      // Verify it appears in list
-      const collections = await qdrantDb.listCollections()
-      expect(collections).toContain(testCollectionName)
-
-      // Drop collection
       await qdrantDb.dropCollection(testCollectionName)
 
-      // Verify it's gone
-      const existsAfterDrop = await qdrantDb.hasCollection(testCollectionName)
-      expect(existsAfterDrop).toBe(false)
+      expect(await qdrantDb.hasCollection(testCollectionName)).toBe(false)
     })
   })
 
   describe('document Insertion with Protobuf Structure', () => {
-    it('should insert documents with metadata using gRPC protobuf format', async () => {
-      // Create collection
+    it.skipIf(() => skipTests)('should insert documents with metadata using gRPC protobuf format', async () => {
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
-      // Train BM25 for sparse vectors
       const bm25 = qdrantDb.getBM25Generator()
       bm25.learn(['test content for indexing', 'another document'])
 
-      // Create test document with metadata including codebasePath
-      const testDoc: VectorDocument = {
+      const testDoc = createTestDocument({
         id: 'chunk_1234567890abcdef',
-        vector: Array.from({ length: 1536 }).fill(0.1),
         content: 'test content for indexing',
-        relativePath: 'src/test.ts',
-        startLine: 1,
-        endLine: 10,
-        fileExtension: '.ts',
-        metadata: {
-          language: 'typescript',
-          codebasePath: '/home/user/test-project',
-          chunkIndex: 0,
-        },
-      }
+      })
 
-      // Insert document
       await qdrantDb.insertHybrid(testCollectionName, [testDoc])
 
-      // Query to verify insertion
       const results = await qdrantDb.query(testCollectionName, '', ['metadata'], 1)
 
       expect(results.length).toBe(1)
@@ -132,142 +119,86 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
   })
 
   describe('query with Metadata Extraction', () => {
+    const metadataTestDocs = [
+      { id: 'chunk_0000000000000001', content: 'user authentication service', relativePath: 'src/auth.ts', endLine: 20, chunkIndex: 0, vectorFill: 0.1 },
+      { id: 'chunk_0000000000000002', content: 'database connection handler', relativePath: 'src/db.ts', endLine: 15, chunkIndex: 1, vectorFill: 0.2 },
+      { id: 'chunk_0000000000000003', content: 'api endpoint controller', relativePath: 'src/api.ts', endLine: 25, chunkIndex: 2, vectorFill: 0.3 },
+    ]
+
     beforeEach(async () => {
-      // Setup: Create collection and insert test data
+      if (skipTests || !container) {
+        return
+      }
+
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
       const bm25 = qdrantDb.getBM25Generator()
-      bm25.learn([
-        'user authentication service',
-        'database connection handler',
-        'api endpoint controller',
-      ])
+      bm25.learn(metadataTestDocs.map((d) => d.content))
 
-      const testDocs: VectorDocument[] = [
-        {
-          id: 'chunk_0000000000000001',
-          vector: Array.from({ length: 1536 }).fill(0.1),
-          content: 'user authentication service',
-          relativePath: 'src/auth.ts',
-          startLine: 1,
-          endLine: 20,
-          fileExtension: '.ts',
+      const testDocs = metadataTestDocs.map((d) =>
+        createTestDocument({
+          id: d.id,
+          vector: Array.from({ length: 1536 }).fill(d.vectorFill) as number[],
+          content: d.content,
+          relativePath: d.relativePath,
+          endLine: d.endLine,
           metadata: {
             language: 'typescript',
             codebasePath: '/home/user/my-project',
-            chunkIndex: 0,
+            chunkIndex: d.chunkIndex,
           },
-        },
-        {
-          id: 'chunk_0000000000000002',
-          vector: Array.from({ length: 1536 }).fill(0.2),
-          content: 'database connection handler',
-          relativePath: 'src/db.ts',
-          startLine: 1,
-          endLine: 15,
-          fileExtension: '.ts',
-          metadata: {
-            language: 'typescript',
-            codebasePath: '/home/user/my-project',
-            chunkIndex: 1,
-          },
-        },
-        {
-          id: 'chunk_0000000000000003',
-          vector: Array.from({ length: 1536 }).fill(0.3),
-          content: 'api endpoint controller',
-          relativePath: 'src/api.ts',
-          startLine: 1,
-          endLine: 25,
-          fileExtension: '.ts',
-          metadata: {
-            language: 'typescript',
-            codebasePath: '/home/user/my-project',
-            chunkIndex: 2,
-          },
-        },
-      ]
+        }),
+      )
 
       await qdrantDb.insertHybrid(testCollectionName, testDocs)
     })
 
-    it('should query and extract metadata.codebasePath correctly', async () => {
-      // Query with metadata field
-      const results = await qdrantDb.query(
-        testCollectionName,
-        '', // empty filter
-        ['metadata'], // request metadata field
-        3,
-      )
+    it.skipIf(() => skipTests)('should query and extract metadata.codebasePath correctly', async () => {
+      const results = await qdrantDb.query(testCollectionName, '', ['metadata'], 3)
 
       expect(results.length).toBeGreaterThan(0)
 
-      // Verify metadata structure
       for (const result of results) {
         expect(result.metadata).toBeDefined()
         expect(typeof result.metadata).toBe('object')
-
-        // Verify codebasePath exists and is correct
         expect(result.metadata.codebasePath).toBe('/home/user/my-project')
         expect(result.metadata.language).toBe('typescript')
         expect(typeof result.metadata.chunkIndex).toBe('number')
       }
     })
 
-    it('should handle protobuf kind.case pattern for string values', async () => {
-      const results = await qdrantDb.query(
-        testCollectionName,
-        '',
-        ['content', 'relativePath', 'metadata'],
-        1,
-      )
+    it.skipIf(() => skipTests)('should handle protobuf kind.case pattern for string values', async () => {
+      const results = await qdrantDb.query(testCollectionName, '', ['content', 'relativePath', 'metadata'], 1)
 
       expect(results.length).toBe(1)
       const result = results[0]
 
-      // Verify string values are extracted from protobuf structure
       expect(typeof result.content).toBe('string')
       expect(result.content.length).toBeGreaterThan(0)
-
       expect(typeof result.relativePath).toBe('string')
       expect(result.relativePath).toContain('.ts')
-
-      // Verify metadata is parsed as JSON object
       expect(typeof result.metadata).toBe('object')
       expect(result.metadata.codebasePath).toBeTruthy()
     })
 
-    it('should handle protobuf kind.case pattern for integer values', async () => {
-      const results = await qdrantDb.query(
-        testCollectionName,
-        '',
-        ['startLine', 'endLine'],
-        1,
-      )
+    it.skipIf(() => skipTests)('should handle protobuf kind.case pattern for integer values', async () => {
+      const results = await qdrantDb.query(testCollectionName, '', ['startLine', 'endLine'], 1)
 
       expect(results.length).toBe(1)
       const result = results[0]
 
-      // Verify integer values are extracted and converted from BigInt
       expect(typeof result.startLine).toBe('number')
       expect(result.startLine).toBeGreaterThanOrEqual(1)
-
       expect(typeof result.endLine).toBe('number')
       expect(result.endLine).toBeGreaterThan(result.startLine)
     })
 
-    it('should return all fields when outputFields is empty', async () => {
-      const results = await qdrantDb.query(
-        testCollectionName,
-        '',
-        [], // empty array = return all fields
-        1,
-      )
+    it.skipIf(() => skipTests)('should return all fields when outputFields is empty', async () => {
+      const results = await qdrantDb.query(testCollectionName, '', [], 1)
 
       expect(results.length).toBe(1)
       const result = results[0]
 
-      // Verify all known fields are present
       expect(result.id).toBeTruthy()
       expect(result.content).toBeTruthy()
       expect(result.relativePath).toBeTruthy()
@@ -278,74 +209,50 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       expect(result.metadata.codebasePath).toBeTruthy()
     })
 
-    it('should filter by fileExtension correctly', async () => {
-      // Query with filter
-      const results = await qdrantDb.query(
-        testCollectionName,
-        'fileExtension == \'.ts\'', // Milvus-style filter expression
-        ['relativePath'],
-        10,
-      )
+    it.skipIf(() => skipTests)('should filter by fileExtension correctly', async () => {
+      const results = await qdrantDb.query(testCollectionName, 'fileExtension == \'.ts\'', ['relativePath'], 10)
 
       expect(results.length).toBeGreaterThan(0)
 
-      // Verify all results have .ts extension
       for (const result of results) {
         expect(result.relativePath).toContain('.ts')
       }
     })
 
-    it('should handle empty collections gracefully', async () => {
-      // Create empty collection
+    it.skipIf(() => skipTests)('should handle empty collections gracefully', async () => {
       const emptyCollection = 'test_empty_collection'
       await qdrantDb.createHybridCollection(emptyCollection, 1536)
 
       try {
-        // Query empty collection
         const results = await qdrantDb.query(emptyCollection, '', ['metadata'], 10)
 
-        // Should return empty array, not throw
         expect(Array.isArray(results)).toBe(true)
         expect(results.length).toBe(0)
       }
       finally {
-        // Cleanup
         await qdrantDb.dropCollection(emptyCollection)
       }
     })
   })
 
   describe('protobuf Backward Compatibility', () => {
-    it('should handle both kind.value and direct value access patterns', async () => {
+    it.skipIf(() => skipTests)('should handle both kind.value and direct value access patterns', async () => {
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
       const bm25 = qdrantDb.getBM25Generator()
       bm25.learn(['test content'])
 
-      const testDoc: VectorDocument = {
+      const testDoc = createTestDocument({
         id: 'chunk_aaaaaaaaaaaaaaaa',
-        vector: Array.from({ length: 1536 }).fill(0.5),
+        vector: Array.from({ length: 1536 }).fill(0.5) as number[],
         content: 'test content',
         relativePath: 'test.ts',
-        startLine: 1,
-        endLine: 10,
-        fileExtension: '.ts',
-        metadata: {
-          language: 'typescript',
-          codebasePath: '/test/path',
-          chunkIndex: 0,
-        },
-      }
+        metadata: { language: 'typescript', codebasePath: '/test/path', chunkIndex: 0 },
+      })
 
       await qdrantDb.insertHybrid(testCollectionName, [testDoc])
 
-      // Query and verify both access patterns work
-      const results = await qdrantDb.query(
-        testCollectionName,
-        '',
-        ['content', 'metadata'],
-        1,
-      )
+      const results = await qdrantDb.query(testCollectionName, '', ['content', 'metadata'], 1)
 
       expect(results.length).toBe(1)
       expect(results[0].content).toBe('test content')
@@ -354,171 +261,118 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
   })
 
   describe('sync Integration', () => {
-    it('should allow sync to extract codebasePath from Qdrant collections', async () => {
+    it.skipIf(() => skipTests)('should allow sync to extract codebasePath from Qdrant collections', async () => {
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
       const bm25 = qdrantDb.getBM25Generator()
       bm25.learn(['sync test'])
 
-      const testDoc: VectorDocument = {
+      const testDoc = createTestDocument({
         id: 'chunk_bbbbbbbbbbbbbbbb',
-        vector: Array.from({ length: 1536 }).fill(0.1),
         content: 'sync test',
         relativePath: 'src/sync.ts',
-        startLine: 1,
         endLine: 5,
-        fileExtension: '.ts',
-        metadata: {
-          language: 'typescript',
-          codebasePath: '/home/user/sync-project', // This is what sync needs
-          chunkIndex: 0,
-        },
-      }
+        metadata: { language: 'typescript', codebasePath: '/home/user/sync-project', chunkIndex: 0 },
+      })
 
       await qdrantDb.insertHybrid(testCollectionName, [testDoc])
 
-      // Simulate what sync does: query for metadata
       const results = await qdrantDb.query(testCollectionName, '', ['metadata'], 1)
 
       expect(results.length).toBe(1)
       expect(results[0].metadata).toBeDefined()
 
-      // Parse metadata (sync does JSON.parse)
       const metadata = typeof results[0].metadata === 'string'
         ? JSON.parse(results[0].metadata)
         : results[0].metadata
 
-      // Verify codebasePath is extractable
       expect(metadata.codebasePath).toBe('/home/user/sync-project')
       expect(typeof metadata.codebasePath).toBe('string')
     })
   })
 
   describe('hybrid Search with BM25', () => {
+    const hybridTestDocs = [
+      { id: 'chunk_0000000000000001', content: 'function get_resolver() { return new URLResolver(); }', relativePath: 'urls/resolvers.py', startLine: 1, endLine: 5, vectorFill: 0.1 },
+      { id: 'chunk_0000000000000002', content: 'def get_resolver(): return URLResolver()', relativePath: 'urls/base.py', startLine: 10, endLine: 15, vectorFill: 0.2 },
+      { id: 'chunk_0000000000000003', content: 'class URLResolver: pass', relativePath: 'urls/resolver.py', startLine: 20, endLine: 25, vectorFill: 0.3 },
+    ]
+
     beforeEach(async () => {
-      // Create collection with hybrid vectors
-      await qdrantDb.createHybridCollection(testCollectionName, 384) // Small dimension for test
+      if (skipTests || !container) {
+        return
+      }
 
-      // Insert test documents with BM25 training
-      const testDocs: VectorDocument[] = [
-        {
-          id: 'chunk_0000000000000001',
-          vector: Array.from({ length: 384 }).fill(0.1),
-          content: 'function get_resolver() { return new URLResolver(); }',
-          relativePath: 'urls/resolvers.py',
-          startLine: 1,
-          endLine: 5,
-          fileExtension: '.py',
-          metadata: { codebasePath: '/test/django' },
-        },
-        {
-          id: 'chunk_0000000000000002',
-          vector: Array.from({ length: 384 }).fill(0.2),
-          content: 'def get_resolver(): return URLResolver()',
-          relativePath: 'urls/base.py',
-          startLine: 10,
-          endLine: 15,
-          fileExtension: '.py',
-          metadata: { codebasePath: '/test/django' },
-        },
-        {
-          id: 'chunk_0000000000000003',
-          vector: Array.from({ length: 384 }).fill(0.3),
-          content: 'class URLResolver: pass',
-          relativePath: 'urls/resolver.py',
-          startLine: 20,
-          endLine: 25,
-          fileExtension: '.py',
-          metadata: { codebasePath: '/test/django' },
-        },
-      ]
+      await qdrantDb.createHybridCollection(testCollectionName, 384)
 
-      // Train BM25 with corpus
-      const corpus = testDocs.map((doc) => doc.content)
+      const testDocs = hybridTestDocs.map((d) =>
+        createTestDocument({
+          id: d.id,
+          vector: Array.from({ length: 384 }).fill(d.vectorFill) as number[],
+          content: d.content,
+          relativePath: d.relativePath,
+          startLine: d.startLine,
+          endLine: d.endLine,
+          fileExtension: '.py',
+          metadata: { codebasePath: '/test/django' },
+        }),
+      )
+
       const bm25Generator = qdrantDb.getBM25Generator()
-      bm25Generator.learn(corpus)
+      bm25Generator.learn(testDocs.map((doc) => doc.content))
 
-      // Insert documents with hybrid vectors
       await qdrantDb.insertHybrid(testCollectionName, testDocs)
     })
 
-    it('should perform hybrid search successfully', async () => {
-      // Act - Perform hybrid search
-      const query = 'get_resolver function'
-      const denseVector = Array.from({ length: 384 }).fill(0.15)
+    it.skipIf(() => skipTests)('should perform hybrid search successfully', async () => {
+      const denseVector = Array.from({ length: 384 }).fill(0.15) as number[]
 
       const results = await qdrantDb.hybridSearch(
         testCollectionName,
-        [
-          { data: denseVector, limit: 10 },
-          { data: query, limit: 10 },
-        ],
+        [{ data: denseVector, limit: 10 }, { data: 'get_resolver function', limit: 10 }],
         { limit: 3 },
       )
 
-      // Assert
       expect(results).toBeDefined()
       expect(Array.isArray(results)).toBe(true)
       expect(results.length).toBeGreaterThan(0)
       expect(results.length).toBeLessThanOrEqual(3)
 
-      // Verify result structure
-      results.forEach((result) => {
+      for (const result of results) {
         expect(result.document).toBeDefined()
         expect(result.document.content).toBeTruthy()
         expect(result.score).toBeGreaterThan(0)
-      })
+      }
     })
 
-    it('should handle query with empty sparse vector gracefully', async () => {
-      // Act - Query with term not in vocabulary (should generate empty sparse vector)
-      const query = 'nonexistent_unknown_term_xyz'
-      const denseVector = Array.from({ length: 384 }).fill(0.15)
+    it.skipIf(() => skipTests)('should handle query with empty sparse vector gracefully', async () => {
+      const denseVector = Array.from({ length: 384 }).fill(0.15) as number[]
 
-      // This should NOT throw "Query variant is missing" error
-      // It should fall back to dense-only search
       const results = await qdrantDb.hybridSearch(
         testCollectionName,
-        [
-          { data: denseVector, limit: 10 },
-          { data: query, limit: 10 },
-        ],
+        [{ data: denseVector, limit: 10 }, { data: 'nonexistent_unknown_term_xyz', limit: 10 }],
         { limit: 3 },
       )
 
-      // Assert - Should still return results (dense-only fallback)
       expect(results).toBeDefined()
       expect(Array.isArray(results)).toBe(true)
-      // May return results based on dense vector similarity
     })
 
-    it('should handle BM25 model persistence across searches', async () => {
-      // First search - BM25 should be trained
-      const query1 = 'get_resolver'
-      const denseVector1 = Array.from({ length: 384 }).fill(0.1)
-
+    it.skipIf(() => skipTests)('should handle BM25 model persistence across searches', async () => {
+      const denseVector1 = Array.from({ length: 384 }).fill(0.1) as number[]
       const results1 = await qdrantDb.hybridSearch(
         testCollectionName,
-        [
-          { data: denseVector1, limit: 10 },
-          { data: query1, limit: 10 },
-        ],
+        [{ data: denseVector1, limit: 10 }, { data: 'get_resolver', limit: 10 }],
         { limit: 3 },
       )
 
       expect(results1).toBeDefined()
       expect(results1.length).toBeGreaterThan(0)
 
-      // Second search - Should use same BM25 model
-      const query2 = 'URLResolver class'
-      const denseVector2 = Array.from({ length: 384 }).fill(0.2)
-
+      const denseVector2 = Array.from({ length: 384 }).fill(0.2) as number[]
       const results2 = await qdrantDb.hybridSearch(
         testCollectionName,
-        [
-          { data: denseVector2, limit: 10 },
-          { data: query2, limit: 10 },
-        ],
+        [{ data: denseVector2, limit: 10 }, { data: 'URLResolver class', limit: 10 }],
         { limit: 3 },
       )
 
