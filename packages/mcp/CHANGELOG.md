@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.2](https://github.com/pleaseai/context-please/compare/mcp-v0.6.1...mcp-v0.6.2) (2026-02-03)
+
+
+### Bug Fixes
+
+* **core:** track inserted chunks and report embedding failures ([#66](https://github.com/pleaseai/context-please/issues/66)) ([bcc5af5](https://github.com/pleaseai/context-please/commit/bcc5af5e1b313d7a0dc570639e540ed4f6ffa029))
+* **mcp:** use setCodebaseIndexFailed for hard embedding failures ([#75](https://github.com/pleaseai/context-please/issues/75)) ([48b7d72](https://github.com/pleaseai/context-please/commit/48b7d72fec52116257eca0f2a0116b873a2cb28e))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @pleaseai/context-please-core bumped to 0.7.1
+
 ## [0.6.1](https://github.com/pleaseai/context-please/compare/mcp-v0.6.0...mcp-v0.6.1) (2026-01-31)
 
 

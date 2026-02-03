@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/pleaseai/context-please/compare/core-v0.7.0...core-v0.7.1) (2026-02-03)
+
+
+### Bug Fixes
+
+* **core:** track inserted chunks and report embedding failures ([#66](https://github.com/pleaseai/context-please/issues/66)) ([bcc5af5](https://github.com/pleaseai/context-please/commit/bcc5af5e1b313d7a0dc570639e540ed4f6ffa029))
+
 ## [0.7.0](https://github.com/pleaseai/context-please/compare/core-v0.6.0...core-v0.7.0) (2025-12-19)
 
 
