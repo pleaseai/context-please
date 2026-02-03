@@ -404,20 +404,21 @@ export class ToolHandlers {
       console.log(`[BACKGROUND-INDEX] ✅ Indexing completed! Files: ${stats.indexedFiles}, Inserted: ${stats.insertedChunks}/${stats.totalChunks} chunks`)
 
       // Set codebase status based on indexing result
-      if (stats.status === 'failed') {
+      // Extract status for TypeScript type narrowing
+      const indexStatus = stats.status
+      if (indexStatus === 'failed') {
         // All embedding batches failed - mark as failed, not indexed
-        this.snapshotManager.setCodebaseIndexFailed(
-          absolutePath,
-          `All embedding batches failed. ${stats.failedChunks} chunks could not be inserted.`,
-          100, // Indexing completed but all embeddings failed
-        )
+        const errorMessage = `All embedding batches failed. ${stats.failedChunks} chunks could not be inserted. This may be caused by rate limits, invalid API key, or network issues.`
+        this.snapshotManager.setCodebaseIndexFailed(absolutePath, errorMessage)
+        console.error(`[BACKGROUND-INDEX] ❌ Indexing failed for ${absolutePath}: ${errorMessage}`)
       }
       else {
         // Indexing succeeded (fully or partially) - mark as indexed
+        // After the 'failed' check, indexStatus is narrowed to 'completed' | 'completed_with_errors' | 'limit_reached'
         this.snapshotManager.setCodebaseIndexed(absolutePath, {
           indexedFiles: stats.indexedFiles,
           totalChunks: stats.totalChunks,
-          status: stats.status,
+          status: indexStatus,
           insertedChunks: stats.insertedChunks,
           failedBatches: stats.failedBatches,
           failedChunks: stats.failedChunks,
