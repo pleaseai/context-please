@@ -1,5 +1,7 @@
+import type { StartedQdrantContainer } from '@testcontainers/qdrant'
 import type { VectorDocument } from '../../src/vectordb/types.js'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { QdrantContainer } from '@testcontainers/qdrant'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { QdrantVectorDatabase } from '../../src/vectordb/qdrant-vectordb.js'
 
 /**
@@ -11,19 +13,39 @@ import { QdrantVectorDatabase } from '../../src/vectordb/qdrant-vectordb.js'
  * 3. Query with metadata extraction (including codebasePath)
  * 4. Protobuf value unwrapping (kind.case pattern)
  *
- * Note: These tests require a running Qdrant instance.
- * - On Linux CI: Qdrant runs as a Docker service container
- * - On Windows CI: Docker service containers are not supported, so tests are skipped
- * - Locally: Set QDRANT_URL environment variable to enable tests
+ * Note: These tests use Testcontainers to automatically manage Qdrant instances.
+ * - Docker is required to run these tests
+ * - If Docker is not available, tests are automatically skipped
  */
-describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () => {
+describe('qdrant gRPC Client Integration', () => {
+  let container: StartedQdrantContainer | undefined
   let qdrantDb: QdrantVectorDatabase
   const testCollectionName = 'test_grpc_integration'
 
-  // Use QDRANT_URL from environment (required for tests to run)
-  const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6334' // gRPC port
+  // Docker availability check - tests will be skipped if Docker is not available
+  let skipTests = false
+
+  beforeAll(async () => {
+    try {
+      // Start Qdrant container with specific version for test determinism
+      container = await new QdrantContainer('qdrant/qdrant:v1.12.5').start()
+    }
+    catch (error) {
+      console.warn('⚠️ Docker not available, skipping Qdrant tests:', (error as Error).message)
+      skipTests = true
+    }
+  }, 120000) // 120 second timeout for image download
 
   beforeEach(async () => {
+    if (skipTests || !container) {
+      return
+    }
+
+    // Get dynamic port from container
+    const host = container.getHost()
+    const grpcPort = container.getMappedPort(6334)
+    const qdrantUrl = `http://${host}:${grpcPort}`
+
     // Create Qdrant connection with gRPC port
     qdrantDb = new QdrantVectorDatabase({
       address: qdrantUrl,
@@ -36,12 +58,16 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
         await qdrantDb.dropCollection(testCollectionName)
       }
     }
-    catch (e) {
+    catch {
       // Ignore errors during cleanup
     }
   })
 
   afterEach(async () => {
+    if (skipTests || !container) {
+      return
+    }
+
     // Clean up test collection
     try {
       const hasCollection = await qdrantDb.hasCollection(testCollectionName)
@@ -49,31 +75,29 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
         await qdrantDb.dropCollection(testCollectionName)
       }
     }
-    catch (e) {
+    catch {
       // Ignore cleanup errors
     }
+  })
 
-    // Disconnect the client to avoid "session has been destroyed" errors
-    try {
-      await qdrantDb.disconnect()
-    }
-    catch (e) {
-      // Ignore disconnect errors
+  afterAll(async () => {
+    if (container) {
+      await container.stop()
     }
   })
 
   describe('collection Operations', () => {
-    it('should list collections using gRPC API', async () => {
+    it.skipIf(() => skipTests)('should list collections using gRPC API', async () => {
       const collections = await qdrantDb.listCollections()
       expect(Array.isArray(collections)).toBe(true)
     })
 
-    it('should check if collection exists using gRPC API', async () => {
+    it.skipIf(() => skipTests)('should check if collection exists using gRPC API', async () => {
       const exists = await qdrantDb.hasCollection(testCollectionName)
       expect(exists).toBe(false)
     })
 
-    it('should create and drop collection using gRPC API', async () => {
+    it.skipIf(() => skipTests)('should create and drop collection using gRPC API', async () => {
       // Create collection
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
@@ -95,7 +119,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
   })
 
   describe('document Insertion with Protobuf Structure', () => {
-    it('should insert documents with metadata using gRPC protobuf format', async () => {
+    it.skipIf(() => skipTests)('should insert documents with metadata using gRPC protobuf format', async () => {
       // Create collection
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
@@ -191,7 +215,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       await qdrantDb.insertHybrid(testCollectionName, testDocs)
     })
 
-    it('should query and extract metadata.codebasePath correctly', async () => {
+    it.skipIf(() => skipTests)('should query and extract metadata.codebasePath correctly', async () => {
       // Query with metadata field
       const results = await qdrantDb.query(
         testCollectionName,
@@ -214,7 +238,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       }
     })
 
-    it('should handle protobuf kind.case pattern for string values', async () => {
+    it.skipIf(() => skipTests)('should handle protobuf kind.case pattern for string values', async () => {
       const results = await qdrantDb.query(
         testCollectionName,
         '',
@@ -237,7 +261,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       expect(result.metadata.codebasePath).toBeTruthy()
     })
 
-    it('should handle protobuf kind.case pattern for integer values', async () => {
+    it.skipIf(() => skipTests)('should handle protobuf kind.case pattern for integer values', async () => {
       const results = await qdrantDb.query(
         testCollectionName,
         '',
@@ -256,7 +280,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       expect(result.endLine).toBeGreaterThan(result.startLine)
     })
 
-    it('should return all fields when outputFields is empty', async () => {
+    it.skipIf(() => skipTests)('should return all fields when outputFields is empty', async () => {
       const results = await qdrantDb.query(
         testCollectionName,
         '',
@@ -278,7 +302,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       expect(result.metadata.codebasePath).toBeTruthy()
     })
 
-    it('should filter by fileExtension correctly', async () => {
+    it.skipIf(() => skipTests)('should filter by fileExtension correctly', async () => {
       // Query with filter
       const results = await qdrantDb.query(
         testCollectionName,
@@ -295,7 +319,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       }
     })
 
-    it('should handle empty collections gracefully', async () => {
+    it.skipIf(() => skipTests)('should handle empty collections gracefully', async () => {
       // Create empty collection
       const emptyCollection = 'test_empty_collection'
       await qdrantDb.createHybridCollection(emptyCollection, 1536)
@@ -316,7 +340,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
   })
 
   describe('protobuf Backward Compatibility', () => {
-    it('should handle both kind.value and direct value access patterns', async () => {
+    it.skipIf(() => skipTests)('should handle both kind.value and direct value access patterns', async () => {
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
       const bm25 = qdrantDb.getBM25Generator()
@@ -354,7 +378,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
   })
 
   describe('sync Integration', () => {
-    it('should allow sync to extract codebasePath from Qdrant collections', async () => {
+    it.skipIf(() => skipTests)('should allow sync to extract codebasePath from Qdrant collections', async () => {
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
       const bm25 = qdrantDb.getBM25Generator()
@@ -442,7 +466,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       await qdrantDb.insertHybrid(testCollectionName, testDocs)
     })
 
-    it('should perform hybrid search successfully', async () => {
+    it.skipIf(() => skipTests)('should perform hybrid search successfully', async () => {
       // Act - Perform hybrid search
       const query = 'get_resolver function'
       const denseVector = Array.from({ length: 384 }).fill(0.15)
@@ -470,7 +494,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       })
     })
 
-    it('should handle query with empty sparse vector gracefully', async () => {
+    it.skipIf(() => skipTests)('should handle query with empty sparse vector gracefully', async () => {
       // Act - Query with term not in vocabulary (should generate empty sparse vector)
       const query = 'nonexistent_unknown_term_xyz'
       const denseVector = Array.from({ length: 384 }).fill(0.15)
@@ -492,7 +516,7 @@ describe.skipIf(!process.env.QDRANT_URL)('qdrant gRPC Client Integration', () =>
       // May return results based on dense vector similarity
     })
 
-    it('should handle BM25 model persistence across searches', async () => {
+    it.skipIf(() => skipTests)('should handle BM25 model persistence across searches', async () => {
       // First search - BM25 should be trained
       const query1 = 'get_resolver'
       const denseVector1 = Array.from({ length: 384 }).fill(0.1)
