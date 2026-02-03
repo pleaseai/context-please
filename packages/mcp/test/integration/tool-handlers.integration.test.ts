@@ -602,6 +602,75 @@ describe('tool Handlers Integration', () => {
       expect(result.content[0].text).toContain('retry')
     })
 
+    it('should show warning when indexed with partial embedding failures (completed_with_errors)', async () => {
+      // Arrange: Set codebase as indexed with some embedding failures
+      snapshotManager.setCodebaseIndexed(fixturesPath, {
+        indexedFiles: 10,
+        totalChunks: 100,
+        status: 'completed_with_errors',
+        insertedChunks: 80,
+        failedBatches: 2,
+        failedChunks: 20,
+      })
+
+      const args = { path: fixturesPath }
+
+      // Act
+      const result = await handlers.handleGetIndexingStatus(args)
+
+      // Assert
+      expect(result.isError).not.toBe(true)
+      expect(result.content[0].text).toContain('indexed but some embeddings failed')
+      expect(result.content[0].text).toContain('80/100')
+      expect(result.content[0].text).toContain('2 embedding batch(es) failed')
+      expect(result.content[0].text).toContain('Re-index with force=true')
+    })
+
+    it('should show hard failure when all embeddings failed (indexStatus: failed)', async () => {
+      // Arrange: Set codebase as indexed but with all batches failed
+      snapshotManager.setCodebaseIndexed(fixturesPath, {
+        indexedFiles: 10,
+        totalChunks: 100,
+        status: 'failed',
+        insertedChunks: 0,
+        failedBatches: 5,
+        failedChunks: 100,
+      })
+
+      const args = { path: fixturesPath }
+
+      // Act
+      const result = await handlers.handleGetIndexingStatus(args)
+
+      // Assert
+      expect(result.isError).not.toBe(true)
+      expect(result.content[0].text).toContain('0/100')
+      // Should indicate this is a hard failure, not just partial
+      expect(result.content[0].text).toContain('failed')
+    })
+
+    it('should show inserted/total chunks format when failure stats are available', async () => {
+      // Arrange: Set codebase with failure tracking fields
+      snapshotManager.setCodebaseIndexed(fixturesPath, {
+        indexedFiles: 5,
+        totalChunks: 50,
+        status: 'completed_with_errors',
+        insertedChunks: 45,
+        failedBatches: 1,
+        failedChunks: 5,
+      })
+
+      const args = { path: fixturesPath }
+
+      // Act
+      const result = await handlers.handleGetIndexingStatus(args)
+
+      // Assert
+      // Should show "45/50 chunks inserted" format instead of just "50 chunks"
+      expect(result.content[0].text).toContain('45/50')
+      expect(result.content[0].text).toContain('chunks')
+    })
+
     it('should handle non-existent path', async () => {
       // Arrange
       const nonExistentPath = '/path/that/does/not/exist'
