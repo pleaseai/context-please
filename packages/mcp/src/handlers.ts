@@ -883,7 +883,7 @@ export class ToolHandlers {
             }
             statusMessage += `\n📅 Status: ${indexedInfo.indexStatus}`
             if (hasFailures) {
-              statusMessage += `\n⚠️  ${indexedInfo.failedBatches} embedding batch(es) failed, ${indexedInfo.failedChunks} chunks not inserted`
+              statusMessage += `\n⚠️  ${indexedInfo.failedBatches} embedding batch(es) failed, ${indexedInfo.failedChunks ?? 0} chunks not inserted`
               statusMessage += `\n💡 Recommendation: Re-index with force=true to retry failed embeddings`
             }
             statusMessage += `\n🕐 Last updated: ${new Date(indexedInfo.lastUpdated).toLocaleString()}`
