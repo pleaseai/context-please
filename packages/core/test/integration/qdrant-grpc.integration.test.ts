@@ -157,6 +157,10 @@ describe('qdrant gRPC Client Integration', () => {
 
   describe('query with Metadata Extraction', () => {
     beforeEach(async () => {
+      if (skipTests || !container) {
+        return
+      }
+
       // Setup: Create collection and insert test data
       await qdrantDb.createHybridCollection(testCollectionName, 1536)
 
@@ -420,6 +424,10 @@ describe('qdrant gRPC Client Integration', () => {
 
   describe('hybrid Search with BM25', () => {
     beforeEach(async () => {
+      if (skipTests || !container) {
+        return
+      }
+
       // Create collection with hybrid vectors
       await qdrantDb.createHybridCollection(testCollectionName, 384) // Small dimension for test
 
