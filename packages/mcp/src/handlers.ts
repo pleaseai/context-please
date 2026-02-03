@@ -592,20 +592,46 @@ export class ToolHandlers {
           if (typeof (vectorDb as any).getCollectionCodebasePaths === 'function') {
             const collectionMap: Map<string, string> = await (vectorDb as any).getCollectionCodebasePaths()
 
+            // Determine the prefix to match against collection codebasePaths.
+            // Collections indexed with base_path store relative portable keys
+            // (e.g. "vendor/mage-os/module-catalog") while collections indexed
+            // without base_path store absolute paths (e.g. "/var/www/html/vendor/...").
+            // Try deriving a portable key from DEFAULT_BASE_PATH or base_path arg
+            // first, then fall back to absolutePath for backward compatibility.
+            // NOTE: Once the base_path feature is merged upstream, this dual
+            // matching can be simplified to always use portable keys.
+            let matchPrefix = absolutePath
+            const basePath = (args as any).base_path || process.env.DEFAULT_BASE_PATH
+            if (basePath && path.isAbsolute(basePath)) {
+              const normalizedBase = path.resolve(basePath)
+              const normalizedAbs = path.resolve(absolutePath)
+              const relative = path.relative(normalizedBase, normalizedAbs)
+
+              if (relative === '') {
+                // path equals base_path — match all collections
+                matchPrefix = '.'
+              }
+              else if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+                matchPrefix = relative
+              }
+            }
+
+            const matchAll = matchPrefix === '.'
+
             // Check if any collections match the path as a prefix
             let hasMatches = false
             for (const codebasePath of collectionMap.values()) {
-              if (codebasePath.startsWith(absolutePath)) {
+              if (matchAll || codebasePath.startsWith(matchPrefix)) {
                 hasMatches = true
                 break
               }
             }
 
             if (hasMatches) {
-              console.log(`[SEARCH] Found matching collections for prefix '${absolutePath}', running parallel multi-collection search`)
+              console.log(`[SEARCH] Found matching collections for prefix '${matchPrefix}', running parallel multi-collection search`)
 
               const searchResults = await this.context.semanticSearchMulti(
-                absolutePath,
+                matchPrefix,
                 collectionMap,
                 query,
                 Math.min(resultLimit, 50),
@@ -623,7 +649,7 @@ export class ToolHandlers {
               }
 
               // Count how many collections contributed results
-              const collectionsSearched = Array.from(collectionMap.values()).filter((cp) => cp.startsWith(absolutePath)).length
+              const collectionsSearched = Array.from(collectionMap.values()).filter((cp) => matchAll || cp.startsWith(matchPrefix)).length
 
               const formattedResults = searchResults.map((result: any, index: number) => {
                 const location = `${result.relativePath}:${result.startLine}-${result.endLine}`

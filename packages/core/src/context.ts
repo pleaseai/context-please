@@ -608,10 +608,16 @@ export class Context {
     const isHybrid = this.getIsHybrid()
     const searchType = isHybrid === true ? 'hybrid search' : 'semantic search'
 
-    // Filter collections whose codebasePath starts with the prefix
+    // Filter collections whose codebasePath starts with the prefix.
+    // A pathPrefix of '.' is a root sentinel (from portable base_path) meaning
+    // "match all collections". This keeps backward compatibility when base_path
+    // is not used (absolute paths) while also supporting portable relative keys.
+    // NOTE: Once the base_path feature is merged upstream, this dual matching
+    // can be simplified to always use portable keys.
+    const matchAll = pathPrefix === '.'
     const matchingCollections: Array<{ collectionName: string, codebasePath: string }> = []
     for (const [collectionName, codebasePath] of collectionMap) {
-      if (codebasePath.startsWith(pathPrefix)) {
+      if (matchAll || codebasePath.startsWith(pathPrefix)) {
         matchingCollections.push({ collectionName, codebasePath })
       }
     }
