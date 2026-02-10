@@ -586,6 +586,141 @@ export class Context {
   }
 
   /**
+   * Search across multiple collections in parallel, merging results by score.
+   *
+   * Used when a single exact collection is not found for the given path.
+   * Discovers all collections whose codebasePath starts with the given prefix,
+   * runs parallel searches, and merges results ranked by descending score.
+   *
+   * @param pathPrefix Path prefix to match collections against (from metadata.codebasePath)
+   * @param collectionMap Map of collectionName → codebasePath for all known collections
+   * @param query Search query
+   * @param topK Number of results to return
+   * @param threshold Similarity threshold
+   * @param filterExpr Optional filter expression
+   * @returns Merged and ranked search results from all matching collections
+   */
+  async semanticSearchMulti(
+    pathPrefix: string,
+    collectionMap: Map<string, string>,
+    query: string,
+    topK: number = 10,
+    threshold: number = 0.5,
+    filterExpr?: string,
+  ): Promise<SemanticSearchResult[]> {
+    const isHybrid = this.getIsHybrid()
+    const searchType = isHybrid === true ? 'hybrid search' : 'semantic search'
+
+    // Filter collections whose codebasePath starts with the prefix.
+    // A pathPrefix of '.' is a root sentinel (from portable base_path) meaning
+    // "match all collections". This keeps backward compatibility when base_path
+    // is not used (absolute paths) while also supporting portable relative keys.
+    // NOTE: Once the base_path feature is merged upstream, this dual matching
+    // can be simplified to always use portable keys.
+    const matchAll = pathPrefix === '.'
+    const matchingCollections: Array<{ collectionName: string, codebasePath: string }> = []
+    for (const [collectionName, codebasePath] of collectionMap) {
+      if (matchAll || codebasePath.startsWith(pathPrefix)) {
+        matchingCollections.push({ collectionName, codebasePath })
+      }
+    }
+
+    if (matchingCollections.length === 0) {
+      console.log(`[Context] ⚠️  No collections found matching prefix: ${pathPrefix}`)
+      return []
+    }
+
+    console.log(`[Context] 🔍 Multi-collection ${searchType}: "${query}" across ${matchingCollections.length} collections matching "${pathPrefix}"`)
+
+    // Generate query embedding once (shared across all collection searches)
+    const queryEmbedding = await this.embedding.embed(query)
+
+    // Build search requests for hybrid mode (shared across all collections)
+    const hybridSearchRequests: HybridSearchRequest[] = isHybrid
+      ? [
+          {
+            data: queryEmbedding.vector,
+            anns_field: 'vector',
+            param: { nprobe: 10 },
+            limit: topK,
+          },
+          {
+            data: query,
+            anns_field: 'sparse_vector',
+            param: { drop_ratio_search: 0.2 },
+            limit: topK,
+          },
+        ]
+      : []
+
+    // Run parallel searches across all matching collections
+    const searchPromises = matchingCollections.map(async ({ collectionName, codebasePath }) => {
+      try {
+        const hasCollection = await this.vectorDatabase.hasCollection(collectionName)
+        if (!hasCollection) {
+          return []
+        }
+
+        if (isHybrid) {
+          const results: HybridSearchResult[] = await this.vectorDatabase.hybridSearch(
+            collectionName,
+            hybridSearchRequests,
+            {
+              rerank: { strategy: 'rrf', params: { k: 100 } },
+              limit: topK,
+              filterExpr,
+            },
+          )
+
+          return results.map((result) => ({
+            content: result.document.content,
+            relativePath: result.document.relativePath,
+            startLine: result.document.startLine,
+            endLine: result.document.endLine,
+            language: result.document.metadata.language || 'unknown',
+            score: result.score,
+            _sourceCollection: codebasePath,
+          }))
+        }
+        else {
+          const results: VectorSearchResult[] = await this.vectorDatabase.search(
+            collectionName,
+            queryEmbedding.vector,
+            { topK, threshold, filterExpr },
+          )
+
+          return results.map((result) => ({
+            content: result.document.content,
+            relativePath: result.document.relativePath,
+            startLine: result.document.startLine,
+            endLine: result.document.endLine,
+            language: result.document.metadata.language || 'unknown',
+            score: result.score,
+            _sourceCollection: codebasePath,
+          }))
+        }
+      }
+      catch (error) {
+        console.warn(`[Context] ⚠️  Search failed for collection ${collectionName} (${codebasePath}):`, error)
+        return []
+      }
+    })
+
+    const allResults = await Promise.all(searchPromises)
+
+    // Flatten and sort by score descending
+    const merged = allResults
+      .flat()
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK)
+
+    console.log(`[Context] ✅ Multi-collection search: ${merged.length} results from ${matchingCollections.length} collections`)
+
+    // Map to SemanticSearchResult (strip internal _sourceCollection field)
+    return merged.map(({ _sourceCollection, ...result }) => result)
+  }
+
+  /**
    * Check if index exists for codebase
    * @param codebasePath Codebase path to check
    * @returns Whether index exists
